@@ -1,0 +1,13 @@
+const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const source=fs.readFileSync(require.resolve('../site/operations.js'),'utf8');
+const access=source.slice(source.indexOf('async function requireSharedWriteAccess('),source.indexOf('async function saveTeamConfig('));
+function setup(state,options={}){let loads=0;const team={active:options.active??false,error:'old failure'};const context=vm.createContext({team,teamBoot:Promise.resolve(),date:'2026-10-30',fetch:async()=>({ok:options.ok??true,json:async()=>state}),loadTeamMonth:async()=>{loads++;team.active=true;return options.loaded??true}});vm.runInContext(access,context);return {context,team,loads:()=>loads}}
+test('로그인 완료와 공동 저장소 최초 준비 필요를 구분한다',async()=>{const e=setup({service:'ch-team-api',authenticated:true,initialized:false});await assert.rejects(e.context.requireSharedWriteAccess(),/최초 준비/);assert.equal(e.loads(),0);assert.equal(e.team.error,'old failure')});
+test('로그인 만료는 사진 업로드 전 안내하고 운영 자료를 읽지 않는다',async()=>{const e=setup({service:'ch-team-api',authenticated:false,initialized:true});await assert.rejects(e.context.requireSharedWriteAccess(),/관리자 인증/);assert.equal(e.loads(),0)});
+test('연결 오류는 로그인 오류로 바꾸지 않고 실제 서버 오류를 유지한다',async()=>{const e=setup({error:'SITE_ORIGINS 설정 오류'},{ok:false});await assert.rejects(e.context.requireSharedWriteAccess(),/SITE_ORIGINS 설정 오류/);assert.equal(e.loads(),0)});
+test('저장 전 정상 연결을 재확인하고 새로 읽은 공동 자료로 활성화한다',async()=>{const e=setup({service:'ch-team-api',authenticated:true,initialized:true});await e.context.requireSharedWriteAccess();assert.equal(e.loads(),1);assert.equal(e.team.active,true);assert.equal(e.team.error,'')});
+test('이미 활성화된 공동 자료는 사진 저장마다 다시 다운로드하지 않는다',async()=>{const e=setup({service:'ch-team-api',authenticated:true,initialized:true},{active:true});await e.context.requireSharedWriteAccess();assert.equal(e.loads(),0)});
+test('공동 자료 읽기 실패는 사진 저장 성공으로 취급하지 않는다',async()=>{const e=setup({service:'ch-team-api',authenticated:true,initialized:true},{loaded:false});await assert.rejects(e.context.requireSharedWriteAccess(),/불러오지 못했/);assert.equal(e.team.error,'old failure')});
+test('진행 중인 공동 설정 저장을 끝까지 기다린다',async()=>{
+ const e={configSaving:true,configSaveWaiters:[]};const ctx=vm.createContext(e);const save=source.slice(source.indexOf('async function saveTeamConfig('),source.indexOf('persist=function('));vm.runInContext(save,ctx);let done=false;const pending=ctx.saveTeamConfig().then(()=>{done=true});await Promise.resolve();assert.equal(done,false);assert.equal(e.configSaveWaiters.length,1);e.configSaveWaiters[0]();await pending;assert.equal(done,true);
+});

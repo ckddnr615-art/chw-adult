@@ -1,0 +1,17 @@
+{
+  "name": "chunghyun-attendance-github",
+  "version": "1.0.0",
+  "private": true,
+  "description": "충현복지관 출석 사이트: GitHub → Cloudflare 정적 배포 + Google 공동 저장",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "check": "node scripts/check.mjs",
+    "test": "node scripts/test.mjs",
+    "build": "node scripts/check.mjs && node scripts/build.mjs",
+    "validate": "npm run test && npm run build",
+    "deploy": "npm run validate && wrangler deploy",
+    "dry-run": "npm run build && wrangler deploy --dry-run",
+    "dev": "node scripts/preview.mjs"
+  },
+  "devDependencies": { "wrangler": "4.155.0" }
+}

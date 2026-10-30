@@ -1,0 +1,11 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {guide} from './guide.mjs';
+const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..'),target=path.join(root,'dist');
+if(target!==path.resolve(root,'dist')||path.dirname(target)!==root)throw Error('Unsafe build directory.');
+await fs.rm(target,{recursive:true,force:true});
+await fs.cp(path.join(root,'site'),target,{recursive:true});
+await fs.writeFile(path.join(target,'연결설명서.html'),await guide());
+const entries=await fs.readdir(target);if(!entries.includes('index.html'))throw Error('Missing index.html');
+console.log('dist built from site/. Only dist is deployed to Cloudflare.');

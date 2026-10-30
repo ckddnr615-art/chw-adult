@@ -1,0 +1,42 @@
+/* 기관 지정 서울알림: 원본 TTF 네 굵기를 사이트와 함께 제공 */
+@font-face {
+  font-family: "Seoul Alrim";
+  src: url("fonts/SeoulAlrim-Medium.woff") format("woff");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Seoul Alrim";
+  src: url("fonts/SeoulAlrim-Bold.woff") format("woff");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Seoul Alrim";
+  src: url("fonts/SeoulAlrim-ExtraBold.woff") format("woff");
+  font-weight: 800;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Seoul Alrim";
+  src: url("fonts/SeoulAlrim-Heavy.woff") format("woff");
+  font-weight: 900;
+  font-style: normal;
+  font-display: swap;
+}
+body {
+  font-family: "Seoul Alrim", "Malgun Gothic", sans-serif;
+  font-weight: 400;
+  font-synthesis: none;
+}
+button, input, select, textarea { font-family: inherit; }
+h1, h2, h3 { font-weight: 800; }
+.participant-mode .welcomehero h1,
+.participant-mode .welcomehero h1 span { font-weight: 900; }
+.panel h2, .sectionintro h2, .participant-mode .todayschedule h2 { font-weight: 800; }
+.primary, .secondary, .groupchoice b, .participant-mode .personcard b { font-weight: 700; }
+.dateclock #todayDate { font-weight: 700; }
+.dateclock #liveClock, .metric strong { font-weight: 800; }

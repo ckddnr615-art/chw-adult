@@ -1,0 +1,12 @@
+<!doctype html><html><head><base target="_top"><meta charset="utf-8"></head><body>
+<script>
+(function(){
+ const allowedOrigin=<?!= parentOriginJson ?>,channel=<?!= channelJson ?>;
+ window.addEventListener('message',function(event){
+  if(event.source!==window.top||event.origin!==allowedOrigin||event.data?.type!=='ch-google-request'||event.data.channel!==channel)return;
+  const id=event.data.id,request=event.data.request;
+  google.script.run.withSuccessHandler(function(response){window.top.postMessage({type:'ch-google-response',channel,id,response},allowedOrigin)}).withFailureHandler(function(){window.top.postMessage({type:'ch-google-response',channel,id,error:'Google 저장 서버 응답 오류. Apps Script 실행 기록을 확인해 주세요.'},allowedOrigin)}).sharedRpc(request,allowedOrigin,channel);
+ });
+ window.top.postMessage({type:'ch-google-ready',channel},allowedOrigin);
+})();
+</script></body></html>
