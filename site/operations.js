@@ -82,7 +82,7 @@ async function commitAttendance(memberId,d,value,publicCheckin=false){if(!team.a
       if(error.currentStatus!==undefined){
         attendanceRequests.delete(key);
         applyAttendanceReceipt(memberId,error.date||d,error.currentStatus,error.revision);
-        render();
+        if(!publicCheckin)render();
         throw error;
       }
       if(n===2||error.status>=400&&error.status<500&&error.status!==409)throw error;
@@ -90,7 +90,7 @@ async function commitAttendance(memberId,d,value,publicCheckin=false){if(!team.a
     }}
     attendanceRequests.delete(key);
     applyAttendanceReceipt(memberId,result.date||d,result.status??value,result.revision);
-    if(publicCheckin){render();return result}
+    if(publicCheckin)return result;
     try{await loadTeamMonth(d.slice(0,7))}catch{team.error='출결 저장 완료 · 최신 자료를 다시 확인해 주세요.'}
     render();return result;
   }
@@ -171,6 +171,20 @@ function attendanceReportMessage(result){
   return `출석과 영역 실적 ${receipt.synced}건의 시트 저장을 확인했어요.`;
 }
 const absenceMessage='오늘 못 와요로 기록되어 있어요. 출석하려면 직원에게 알려 주세요.';
+let kioskRefreshQueued=false;
+function refreshKioskAfterDialog(){
+  const dialog=$('#dialog');
+  if(!dialog.open){
+    render();
+    return;
+  }
+  if(kioskRefreshQueued)return;
+  kioskRefreshQueued=true;
+  dialog.addEventListener('close',()=>{
+    kioskRefreshQueued=false;
+    if(location.hash==='#kiosk'||!location.hash)refreshKioskAfterDialog();
+  },{once:true});
+}
 function showAbsenceNotice(){
   const content='<h2>오늘 못 와요</h2><p>'+absenceMessage+'</p>';
   if($('#dialog').open)$('#dialogcontent').innerHTML=content;
@@ -206,9 +220,9 @@ function bindPublicCheckins(){
         $('#dialogcontent').innerHTML='<span class="saving-spinner" aria-hidden="true"></span><h2>출석을 기록하고 있어요</h2><p>'+
           esc(member.name)+' 님, 잠시만 기다려 주세요.</p>';
         $('#closeDialog').textContent='창 닫기';
-        await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
         try{
           const result=await commitAttendance(member.id,date,'출석',true);
+          refreshKioskAfterDialog();
           if(!isCurrent())return;
           if(status(member)==='결석'){showAbsenceNotice();return}
           $('#dialogcontent').innerHTML='<span class="successmark">✓</span><h2>'+esc(member.name)+
@@ -216,6 +230,7 @@ function bindPublicCheckins(){
           $('#closeDialog').textContent='확인했어요';
           say(member.name+' 님 출석했어요.');
         }catch(error){
+          if(error.currentStatus!==undefined)refreshKioskAfterDialog();
           if(!isCurrent())return;
           if(error.code==='ABSENCE_LOCKED'){showAbsenceNotice();return}
           $('#dialogcontent').innerHTML='<h2>기록을 확인하지 못했어요</h2><p>'+esc(error.message)+
