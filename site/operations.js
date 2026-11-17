@@ -152,9 +152,37 @@ function bindPublicCheckins(){if(!team.active){document.querySelectorAll('[data-
 bindManagement=function(page){
   previousOperationsBind(page);bindClosureManagement();if(page==='appearance')bindBannerSettings();if(page==='kiosk')bindPublicCheckins();
   if(page==='login'){
-    $('#loginCode').insertAdjacentHTML('beforebegin','<label for="staffUsername">직원 아이디 (개별 계정 사용 시)</label><input id="staffUsername" autocomplete="username">');
-    $('#loginForm').onsubmit=async e=>{e.preventDefault();const button=e.submitter;button.disabled=true;try{await teamBoot;if(team.configured){const response=await fetch('/api/integration-login',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:$('#loginCode').value,username:$('#staffUsername').value.trim()})});if(!response.ok){const failure=await response.json();throw Error(failure.error||'직원 비밀번호를 확인해 주세요.');}team.staffId=(await response.json()).staffId||'';team.authenticated=true;monthRevisions.clear();await loadTeamMonth(date.slice(0,7),true)}else if($('#loginCode').value!=='demo1234')throw Error('프리뷰 코드를 확인해 주세요.');adminSession=true;location.hash='dashboard'}catch(error){$('#loginError').textContent=error.message;button.disabled=false}};
-    if(team.configured){$('#loginHint').textContent=team.local?'이 컴퓨터의 공유 서버 · 시연 비밀번호 demo1234 (운영 배포 시 변경)':'배포 서버의 직원 비밀번호를 입력하세요. Google 계정 비밀번호가 아닙니다.'}
+    $('#loginHint').textContent=team.local||!team.loading&&!team.configured?'로컬 미리보기 비밀번호는 demo1234입니다.':'기존 관리자 비밀번호를 입력해 주세요.';
+    $('#loginForm').onsubmit=async event=>{
+      event.preventDefault();
+      const button=event.submitter;
+      const password=$('#loginCode').value;
+      button.disabled=true;
+      $('#loginError').textContent='';
+      try{
+        await teamBoot;
+        if(team.configured){
+          const response=await fetch('/api/integration-login',{
+            method:'POST',credentials:'same-origin',
+            headers:{'Content-Type':'application/json'},body:JSON.stringify({password})
+          });
+          if(!response.ok){
+            if(response.status===401)throw Error('관리자 비밀번호를 확인해 주세요.');
+            const failure=await response.json();
+            throw Error(failure.error||'관리자 로그인에 실패했습니다.');
+          }
+          team.staffId='';
+          team.authenticated=true;
+          monthRevisions.clear();
+          await loadTeamMonth(date.slice(0,7),true);
+        }else if(password!=='demo1234')throw Error('관리자 비밀번호를 확인해 주세요.');
+        adminSession=true;
+        location.hash='dashboard';
+      }catch(error){
+        $('#loginError').textContent=error.message;
+        button.disabled=false;
+      }
+    };
   }
   if(page==='dashboard')showStaffDesk();
   if(page==='attendance'){document.querySelectorAll('[data-status]').forEach(select=>select.onchange=async()=>{const previous=status(management.find('members',select.dataset.status),selectedDate);select.disabled=true;try{const result=await commitAttendance(select.dataset.status,selectedDate,select.value);toast(staffAttendanceMessage(result))}catch(error){select.value=previous;select.disabled=false;toast(error.message)}})}
