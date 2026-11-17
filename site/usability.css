@@ -16,7 +16,8 @@ body:not(.participant-mode) dialog:has(.assignment-picker){width:760px;max-width
 .participant-mode .kiosk-flow .compact-picker .communityicon svg{width:56px;height:56px}
 @media(max-width:760px){.participant-mode .kiosk-flow .compact-picker .groupchoice,.participant-mode .kiosk-flow .compact-picker .groupchoice.selected{grid-template-columns:44px minmax(0,1fr);min-height:90px}.participant-mode .kiosk-flow .compact-picker .communityicon{width:44px;height:44px;min-height:44px}.participant-mode .kiosk-flow .compact-picker .communityicon svg{width:40px;height:40px}}
 /* Three independent still photos: no timers, transitions or repeated fetches. */
-.editable-banner .banner-photo-strip{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;flex:0 0 52%;width:52%;min-width:0;align-self:stretch}
+.editable-banner .banner-photo-strip{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;flex:0 0 52%;width:52%;min-width:0;align-self:stretch}
+.editable-banner .banner-photo-strip[data-columns="2"]{grid-template-columns:repeat(2,minmax(0,1fr))}
 .banner-photo-slot{position:relative;overflow:hidden;min-width:0;height:180px;border-radius:16px;background:#fff}
 .banner-photo-slot .banner-portrait{display:block;position:relative;width:100%;height:100%;margin:0;border-radius:0;overflow:hidden}
 .banner-photo-slot .photo-fallback{display:none}.banner-photo-slot.fit-cover img{object-fit:cover}.banner-photo-slot.fit-contain img{object-fit:contain}
@@ -42,14 +43,7 @@ body:not(.participant-mode) dialog:has(.assignment-picker){width:760px;max-width
 @media(max-width:999px){.participant-mode .kiosk-flow .compact-picker .groupchoices{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:760px){.participant-mode .kiosk-flow .compact-picker .groupchoice,.participant-mode .kiosk-flow .compact-picker .groupchoice.selected{grid-template-rows:minmax(40px,auto) 20px}.kiosk-flow .compact-picker .choicecheck{min-height:20px}}
 @media(max-width:760px){.participant-mode .kiosk-flow .compact-picker .groupchoice,.participant-mode .kiosk-flow .compact-picker .groupchoice.selected{grid-template-rows:48px 20px;min-height:100px}}
-/* Three visible cells, up to nine cached photos. Controls never overlap attendance targets. */
-.editable-banner .banner-gallery{flex:0 0 52%;width:52%;min-width:0;align-self:center}
-.editable-banner .banner-gallery .banner-photo-strip{width:100%;flex:none}
-.banner-rotation-controls{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:44px;margin-top:6px;font-size:12px;color:#52677e}
-.banner-rotation-controls button{min-height:44px;font-size:12px;margin:0;padding:8px 12px;white-space:nowrap}
-.banner-slot-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.banner-slot-tabs button{margin:0}
-@media(max-width:760px){.editable-banner .banner-gallery,.participant-mode .compact-welcome .banner-gallery{flex-basis:100%;width:100%}.editable-banner .banner-gallery .banner-photo-strip{width:100%}.banner-rotation-controls{font-size:11px}}
-@media(prefers-reduced-motion:reduce){.banner-photo-strip{animation:none!important;transition:none!important}}
+.banner-slot-tabs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.banner-slot-tabs button{margin:0}
 .program-workspace-actions{display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin:18px 0 28px}.program-workspace-actions .secondary{display:inline-flex;align-items:center;min-height:44px;padding:12px 18px;border:1px solid #d2deed;border-radius:10px;background:#fff;color:#345591}.weekly-timetable td[rowspan]{vertical-align:top}
 .banner-photo-fields .checklabel{display:flex;align-items:center;gap:10px}.banner-photo-fields .checklabel input[type=checkbox]{width:18px;height:18px;min-height:18px;padding:0}
 

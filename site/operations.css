@@ -19,6 +19,25 @@ body:not(.participant-mode) .metric{border-radius:22px;border:1px solid #e8ebef;
 .program-attendance-group summary span{margin-inline-start:12px;color:#4a617b}
 .program-session{padding:4px 16px 16px}
 .program-session h3,.program-session p{margin:8px 0}
+
+.studio-hero.editable-banner{
+  display:grid;
+  grid-template-columns:minmax(0,29rem) minmax(0,27rem);
+  justify-content:center;
+  align-items:center;
+  gap:clamp(20px,3vw,44px);
+  padding:clamp(24px,3vw,40px);
+  min-height:0;
+}
+.studio-hero.editable-banner .banner-photo{
+  width:100%;
+  height:clamp(210px,24vw,300px);
+}
+.studio-hero.editable-banner .community-art{margin-inline:auto}
+@media(max-width:650px){
+  .studio-hero.editable-banner{grid-template-columns:minmax(0,1fr);gap:16px}
+  .studio-hero.editable-banner .banner-photo{height:clamp(160px,50vw,240px)}
+}
 .holiday-status{background:#edf3f0;border:1px solid #dce8e0;color:#365746;border-radius:12px;padding:12px 16px;font-size:13px;margin:0 0 14px}.holiday-status .secondary{font-size:12px;padding:5px 10px}
 /* Flexible grids keep both steps equal and give portraits room to be recognized. */
 .participant-mode .progresssteps{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));max-width:none;width:100%;align-items:stretch;gap:16px}
