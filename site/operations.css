@@ -19,6 +19,8 @@ body:not(.participant-mode) .metric{border-radius:22px;border:1px solid #e8ebef;
 .program-attendance-group summary span{margin-inline-start:12px;color:#4a617b}
 .program-session{padding:4px 16px 16px}
 .program-session h3,.program-session p{margin:8px 0}
+.affiliation-table td:has([data-kiosk-move]){white-space:normal}
+.affiliation-table [data-kiosk-move]{margin-bottom:4px}
 
 .studio-hero.editable-banner{
   display:grid;

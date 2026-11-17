@@ -272,3 +272,58 @@ test('서로 다른 개인 배정과 대체 참여를 프로그램별로 모아 
  const rows=e.sheets.get('검증 실적').rows.slice(1);
  assert.equal(rows.filter(row=>row[7]==='창작 활동').length,2);
 });
+
+test('출석 확정이 실적 전송보다 먼저 반환되고 자동 작업이 대기 실적을 한 번만 입력한다',()=>{
+ const e=environment();e.login();
+ assert.equal(e.call('/api/team/initialize',{management:e.model().data,records:{}}).status,200);
+ e.context.ScriptApp={getProjectTriggers:()=>[{getHandlerFunction:()=>'flushSharedReportQueue_'}]};
+ const request={memberId:'person-1',requestId:crypto.randomUUID(),deferReports:true};
+ const saved=e.call('/api/team/checkin',request);
+ assert.equal(saved.status,200);
+ assert.equal(saved.body.reportReceipt.pending,1);
+ assert.equal(saved.body.reportReceipt.synced,0);
+ assert.equal(e.sheets.has('검증 실적'),false);
+ const state=e.call('/api/team/state?month=2026-10',{},'GET').body;
+ assert.equal(saved.body.revision,state.revision);
+ assert.equal(state.records['2026-10-29:person-1'],'출석');
+ e.context.flushSharedReportQueue_();
+ e.context.flushSharedReportQueue_();
+ const replay=e.call('/api/team/checkin',request);
+ assert.equal(replay.body.replayed,true);
+ assert.equal(replay.body.reportReceipt.synced,1);
+ assert.equal(e.sheets.get('검증 실적').getLastRow(),2);
+});
+
+test('자동 작업이 없으면 출석 중 실적 전송으로 돌아간다',()=>{
+ const e=environment();e.login();e.context.ScriptApp={getProjectTriggers:()=>[]};
+ e.call('/api/team/initialize',{management:e.model().data,records:{}});
+ assert.equal(e.call('/api/team/checkin',{memberId:'person-1',requestId:crypto.randomUUID(),deferReports:true}).body.reportReceipt.synced,1);
+});
+
+test('관리자가 기록한 결석은 오래된 출석 버튼과 이전 요청 재전송으로 바뀌지 않는다',()=>{
+ const e=environment(),day='2026-10-29',memberId='person-1';
+ e.login();
+ assert.equal(e.call('/api/team/initialize',{management:e.model().data,records:{}}).status,200);
+ const oldRequest={memberId,requestId:crypto.randomUUID()};
+ assert.equal(e.call('/api/team/checkin',oldRequest).body.reportReceipt.synced,1);
+ assert.equal(e.call('/api/team/attendance',{memberId,date:day,status:'결석',expectedStatus:'출석',requestId:crypto.randomUUID()}).status,200);
+ const read=()=>e.call('/api/team/state?month=2026-10',{},'GET').body;
+ const revision=read().revision;
+ e.logout();
+ for(const request of [oldRequest,{memberId,expectedStatus:'',deferReports:true,requestId:crypto.randomUUID()}]){
+  const denied=e.call('/api/team/checkin',request);
+  assert.equal(denied.status,409);
+  assert.equal(denied.body.code,'ABSENCE_LOCKED');
+  assert.equal(denied.body.currentStatus,'결석');
+  assert.equal(denied.body.revision,revision);
+ }
+ assert.equal(read().records[day+':'+memberId],'결석');
+ assert.equal(read().revision,revision);
+ assert.equal(e.sheets.get('검증 실적').rows[1][0],'');
+ assert.equal(e.call('/api/team/attendance',{memberId,date:day,status:'출석',requestId:crypto.randomUUID()}).status,401);
+ e.login();
+ assert.equal(e.call('/api/team/attendance',{memberId,date:day,status:'출석',expectedStatus:'결석',requestId:crypto.randomUUID()}).body.reportReceipt.synced,1);
+ assert.equal(read().records[day+':'+memberId],'출석');
+ assert.equal(e.sheets.get('검증 실적').getLastRow(),2);
+ assert.equal(e.sheets.get('검증 실적').rows[1][0],'검증 이용인');
+});

@@ -29,4 +29,17 @@ test('한 장은 한 칸 전체에 표시하고 사진이 없으면 심벌 하�
  const empty=context.bannerPhotoStrip({id:'kiosk',photos:[null,null]});
  assert.equal((empty.match(/chunghyun-symbol/g)||[]).length,1);
  assert.equal((context.bannerSlotControls().match(/data-banner-slot=/g)||[]).length,2);
+ assert.match(context.bannerSlotControls(),/id="swapBannerPhotos"/);
+});
+
+test('소속 카드 순서는 기존 소속 ID와 도형을 유지하고 저장 후 다시 적용된다',()=>{
+ const ManagementStore=require('../site/domain.js');
+ const model=new ManagementStore(ManagementStore.seed(['404호','401호','403호','405호'],[],[],{}));
+ model.data.communities[1].shape='square';
+ model.moveKioskAffiliation('community-2',-1);
+ model.moveKioskAffiliation('community-3',-1);
+ const restored=new ManagementStore(JSON.parse(JSON.stringify(model.data)));
+ assert.deepEqual(restored.kioskAffiliations().map(c=>c.name),['401호','403호','404호','405호']);
+ assert.equal(restored.kioskAffiliations()[0].shape,'square');
+ assert.equal(restored.communityName('community-1'),'404호');
 });

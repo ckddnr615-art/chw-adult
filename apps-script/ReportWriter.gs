@@ -1,8 +1,10 @@
 /* Daily-area sheet projection used directly by SharedServer.gs. */
 function writeProjectedPerformance_(entry,props) {
-  var map=JSON.parse(props.getProperty('SHEET_TAB_MAP')||'{}'),tab=map[entry.communityId];
+  var map=JSON.parse(props.getProperty('SHEET_TAB_MAP')||'{}'),registry=JSON.parse(props.getProperty('REPORT_TAB_REGISTRY')||'{}'),registered=registry[entry.communityId],tab=map[entry.communityId];
   if(!tab)throw Error('출석 당시 소속의 시트 매핑이 없습니다.');
-  var book=SpreadsheetApp.openById(props.getProperty('SPREADSHEET_ID')),sheet=book.getSheetByName(tab);
+  var book=SpreadsheetApp.openById(props.getProperty('SPREADSHEET_ID')),sheet=registered?book.getSheets().find(function(s){return s.getSheetId()===registered.sheetId}):book.getSheetByName(tab);
+  if(registered&&!sheet)throw Error('연결된 실적 탭이 삭제되었습니다. 기존 탭을 복구해 주세요.');
+  if(sheet)tab=sheet.getName();var aliases=[tab].concat(registered?registered.names:[]);
   if(!sheet&&entry.memberId)sheet=book.insertSheet(tab);if(!sheet)throw Error('대상 시트가 없습니다. 매핑을 확인하세요.');
   var expected=entry.memberId?['이름','','','','','','사업날짜','영역명','','','','담당자','','출석고유키(자동)']:['이름','','','','','','사업날짜','영역명','담당자'];
   if(sheet.getLastRow()===0)sheet.getRange(1,1,1,expected.length).setValues([expected]);
@@ -15,9 +17,9 @@ function writeProjectedPerformance_(entry,props) {
   var index=rows.findIndex(function(r){return r[0]===entry.id}),old=index>=0?rows[index]:null;
   if(old&&Number(old[1])>entry.version)throw Error('최신 버전이 이미 저장되어 있습니다.');
   if(old&&Number(old[1])===entry.version&&old[6]==='confirmed')return {ok:true,id:entry.id,version:entry.version,unchanged:true};
-  if(old&&old[2]!==tab)throw Error('기록 당시 커뮤니티 탭이 변경되었습니다. 매핑을 복구해 주세요.');
+  if(old&&aliases.indexOf(old[2])<0)throw Error('기록 당시 소속 탭이 변경되었습니다. 매핑을 복구해 주세요.');
   // Reserve the destination BEFORE projecting it. Retrying after a lost response uses this same row.
-  var destination=old?Number(old[3]):Math.max(sheet.getLastRow(),rows.filter(function(r){return r[2]===tab}).reduce(function(max,r){return Math.max(max,Number(r[3])||0)},1))+1;
+  var destination=old?Number(old[3]):Math.max(sheet.getLastRow(),rows.filter(function(r){return aliases.indexOf(r[2])>=0}).reduce(function(max,r){return Math.max(max,Number(r[3])||0)},1))+1;
   var ledgerRow=index>=0?index+2:ledger.getLastRow()+1;
   if(destination>sheet.getMaxRows())sheet.insertRowsAfter(sheet.getMaxRows(),destination-sheet.getMaxRows());
   var range=sheet.getRange(destination,1,1,width),current=range.getDisplayValues()[0];

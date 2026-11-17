@@ -80,6 +80,16 @@
       return {version:1,communities,members,areas,programs:programList,schedules,entries:[],days:{},audit:[]};
     }
     list(type){return this.data[type].filter(v=>v.active!==false)}
+    kioskAffiliations(){
+      return this.list('communities').sort((a,b)=>(a.kioskOrder??Infinity)-(b.kioskOrder??Infinity));
+    }
+    moveKioskAffiliation(id,direction){
+      const rows=this.kioskAffiliations(),index=rows.findIndex(item=>item.id===id);
+      const target=index+direction;
+      if(index<0||![-1,1].includes(direction)||target<0||target>=rows.length)return;
+      [rows[index],rows[target]]=[rows[target],rows[index]];
+      rows.forEach((item,position)=>{item.kioskOrder=position});
+    }
     find(type,id){return this.data[type].find(v=>v.id===id)}
     communityName(id){return this.find('communities',id)?.name||'삭제된 커뮤니티'}
     memberGroupAt(member,d){return [...(member.history||[])].filter(h=>h.from<=d).sort((a,b)=>a.from.localeCompare(b.from)).at(-1)?.communityId||null}

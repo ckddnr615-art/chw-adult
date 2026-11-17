@@ -82,19 +82,34 @@ function sharedQueueReports_(month,memberId,date){
   month.reports[id]={signature,sync:'pending',error:'',entry:Object.assign({},report,{id,version:old?old.entry.version+1:1})};
  });
 }
-function sharedFlushMonth_(month,limit){
- if(!sharedReportsConfigured_())return 0;var count=0;Object.keys(month.reports).forEach(function(id){var report=month.reports[id];if(report.sync==='synced'||count>=limit)return;count++;
-  try{writeProjectedPerformance_(report.entry,sharedProps_());report.sync='synced';report.error=''}catch(error){report.sync='error';report.error=error.message}
- });
+function sharedFlushMonth_(month,limit,deadline){
+ if(!sharedReportsConfigured_())return 0;
+ var count=0,props=sharedProps_();
+ var reports=Object.values(month.reports).filter(function(report){return report.sync!=='synced'});
+ reports.sort(function(a,b){return Number(a.sync==='error')-Number(b.sync==='error')});
+ for(var report of reports){
+  if(count>=limit||deadline&&Date.now()>=deadline)break;
+  count++;
+  try{writeProjectedPerformance_(report.entry,props);report.sync='synced';report.error=''}catch(error){report.sync='error';report.error=error.message}
+ }
  month.entries.forEach(function(entry){var report=month.reports['area-'+sharedHash_(PerformanceProjection.key(entry))];entry.sync=report?.sync||'pending';entry.error=report?.error||''});return count;
+}
+function sharedCanDeferReports_(){
+ var cache=CacheService.getScriptCache(),key='report-maintenance-installed',cached=cache.get(key);
+ if(cached)return cached==='yes';
+ try{
+  var installed=ScriptApp.getProjectTriggers().some(function(trigger){return trigger.getHandlerFunction()==='flushSharedReportQueue_'});
+  cache.put(key,installed?'yes':'no',60);return installed;
+ }catch(error){return false}
 }
 function sharedReportReceipt_(month,memberId,date){
  var reports=Object.keys(month.reports).map(function(id){return month.reports[id]}).filter(function(r){return r.entry.memberId===memberId&&r.entry.date===date});
  var active=reports.filter(function(r){return r.entry.checked}),map={};try{map=JSON.parse(sharedProps_().getProperty('SHEET_TAB_MAP')||'{}')}catch(error){}
  return {areaCount:active.length,synced:active.filter(function(r){return r.sync==='synced'}).length,pending:reports.filter(function(r){return r.sync==='pending'}).length,failed:reports.filter(function(r){return r.sync==='error'}).length,mappingMissing:reports.some(function(r){return !map[r.entry.communityId]}),noSchedule:month.records[date+':'+memberId]==='출석'&&!month.entries.some(function(e){return e.memberId===memberId&&e.date===date})};
 }
-function sharedApply_(config,month,memberId,date,status,recalculate,actor){
- var model=sharedModel_(config,month);model.holidays=sharedHolidays_(date.slice(0,4)).dates;
+function sharedApply_(config,month,memberId,date,status,recalculate,actor,preparedModel){
+ var model=preparedModel||sharedModel_(config,month);
+ if(!preparedModel)model.holidays=sharedHolidays_(date.slice(0,4)).dates;
  var result=model.applyAttendance(month.records,memberId,date,status,recalculate);month.days=model.data.days;month.entries=model.data.entries;month.audit=(month.audit||[]).concat(model.data.audit.map(function(item){return Object.assign(item,{actor:actor||'일정 변경 재집계'})})).slice(-1000);sharedQueueReports_(month,memberId,date);return result;
 }
 function sharedReconcile_(config,month,limit){
@@ -189,19 +204,27 @@ function sharedRpc(request,origin,channel){
    if(!manifest.initialized)return sharedReply_({error:'운영 자료를 먼저 초기화해 주세요.'},409);
    var date=publicCheckin?today:input.date,status=publicCheckin?'출석':input.status,member=config.members.find(function(m){return m.id===input.memberId&&m.active!==false});
    if(!member||!/^\d{4}-\d{2}-\d{2}$/.test(date)||date>today||!['출석','결석',''].includes(status)||!/^[-a-zA-Z0-9]{8,100}$/.test(input.requestId||''))return sharedReply_({error:'출결 요청 오류'},400);
-   var key=date.slice(0,7),month=sharedMonth_(book,manifest,key),signature=JSON.stringify([member.id,date,status]),prior=month.requests[input.requestId];if(prior){
-    if(prior.signature!==signature)return sharedReply_({error:'요청 ID 충돌'},409);
-    var savedStatus=month.records[date+':'+member.id]||'';
-    if(savedStatus!==status)return sharedReply_({error:'저장 후 최신 출결이 변경되었습니다. 현재 출결을 확인해 주세요.',currentStatus:savedStatus},409);
-    return sharedReply_(Object.assign({},prior.result,{replayed:true,reportReceipt:sharedReportReceipt_(month,member.id,date)}));
-   }
+   var key=date.slice(0,7),month=sharedMonth_(book,manifest,key);
    var currentStatus=month.records[date+':'+member.id]||'';
-   if(!publicCheckin&&input.expectedStatus!==undefined&&input.expectedStatus!==currentStatus&&status!==currentStatus)return sharedReply_({error:'다른 직원이 출결을 먼저 바꿨습니다. 현재 출결을 확인한 뒤 다시 선택해 주세요.',currentStatus:currentStatus},409);
-   if(currentStatus===status)return sharedReply_({ok:true,status:status,replayed:true,reportReceipt:sharedReportReceipt_(month,member.id,date)});
+   if(publicCheckin&&currentStatus==='결석'){
+    return sharedReply_({error:'오늘 못 와요로 기록되어 있어요. 출석하려면 직원에게 알려 주세요.',
+     code:'ABSENCE_LOCKED',currentStatus:currentStatus,date:date,revision:manifest.revision},409);
+   }
+   var signature=JSON.stringify([member.id,date,status]),prior=month.requests[input.requestId];if(prior){
+    if(prior.signature!==signature)return sharedReply_({error:'요청 ID 충돌'},409);
+    if(currentStatus!==status)return sharedReply_({error:'저장 후 최신 출결이 변경되었습니다. 현재 출결을 확인해 주세요.',currentStatus:currentStatus,date:date,revision:manifest.revision},409);
+    return sharedReply_(Object.assign({},prior.result,{replayed:true,revision:manifest.revision,reportReceipt:sharedReportReceipt_(month,member.id,date)}));
+   }
+   if(!publicCheckin&&input.expectedStatus!==undefined&&input.expectedStatus!==currentStatus&&status!==currentStatus)return sharedReply_({error:'다른 직원이 출결을 먼저 바꿨습니다. 현재 출결을 확인한 뒤 다시 선택해 주세요.',currentStatus:currentStatus,date:date,revision:manifest.revision},409);
+   if(currentStatus===status)return sharedReply_({ok:true,date:date,status:status,replayed:true,revision:manifest.revision,reportReceipt:sharedReportReceipt_(month,member.id,date)});
    var holidays=sharedHolidays_(date.slice(0,4)),model=sharedModel_(config,month);model.holidays=holidays.dates;if(publicCheckin&&model.holidayName(date))return sharedReply_({error:model.holidayName(date)+' · 오늘은 쉬는 날입니다.'},422);
-   var result=Object.assign({ok:true},sharedApply_(config,month,member.id,date,status,false,publicCheckin?'참여자 출석':actor));month.requests[input.requestId]={signature,result};var requestKeys=Object.keys(month.requests);while(requestKeys.length>2000)delete month.requests[requestKeys.shift()];
+   var result=Object.assign({ok:true},sharedApply_(config,month,member.id,date,status,false,publicCheckin?'참여자 출석':actor,model));month.requests[input.requestId]={signature,result};var requestKeys=Object.keys(month.requests);while(requestKeys.length>2000)delete month.requests[requestKeys.shift()];
    sharedSaveMonth_(book,manifest,key,month);sharedCommit_(book,manifest); // Commit attendance before attempting report projection.
-   if(sharedFlushMonth_(month,4)){sharedSaveMonth_(book,manifest,key,month);sharedCommit_(book,manifest)}return sharedReply_(Object.assign({},result,{reportReceipt:sharedReportReceipt_(month,member.id,date)}));
+   // The committed month already contains the report queue. The installed maintenance trigger drains it.
+   if(!(publicCheckin&&input.deferReports===true&&sharedCanDeferReports_())&&sharedFlushMonth_(month,4)){
+    sharedSaveMonth_(book,manifest,key,month);sharedCommit_(book,manifest);
+   }
+   return sharedReply_(Object.assign({},result,{revision:manifest.revision,reportReceipt:sharedReportReceipt_(month,member.id,date)}));
   }
   if(!admin)return sharedReply_({error:'관리자 인증이 필요합니다.'},401);
   if(path==='/api/team/program-attendance'&&request.method==='POST'){
@@ -249,7 +272,15 @@ function sharedRpc(request,origin,channel){
    sharedCommit_(book,manifest);return sharedReply_({ok:true,reconcile:remaining>0});
   }
   if(path==='/api/team/maintenance'||path==='/api/team/sync'){
-   var budget=3,reportBudget=6,remaining=0,anyChanged=false;Object.keys(manifest.months).forEach(function(key){var month=sharedMonth_(book,manifest,key),changed=false;if(budget>0){var done=sharedReconcile_(config,month,budget);budget-=done;changed=done>0;}if(reportBudget>0){var flushed=sharedFlushMonth_(month,reportBudget);reportBudget-=flushed;if(flushed)changed=true}remaining+=month.reconcile.length;if(changed){sharedSaveMonth_(book,manifest,key,month);anyChanged=true}});if(anyChanged)sharedCommit_(book,manifest);return sharedReply_({ok:true,remaining});
+   var budget=3,reportBudget=24,deadline=Date.now()+12000,remaining=0,anyChanged=false;
+   Object.keys(manifest.months).reverse().forEach(function(key){
+    var month=sharedMonth_(book,manifest,key),changed=false;
+    if(budget>0&&Date.now()<deadline){var done=sharedReconcile_(config,month,budget);budget-=done;changed=done>0}
+    if(reportBudget>0){var flushed=sharedFlushMonth_(month,reportBudget,deadline);reportBudget-=flushed;if(flushed)changed=true}
+    remaining+=month.reconcile.length;
+    if(changed){sharedSaveMonth_(book,manifest,key,month);anyChanged=true}
+   });
+   if(anyChanged)sharedCommit_(book,manifest);return sharedReply_({ok:true,remaining});
   }
   return sharedReply_({error:'지원하지 않는 API 경로'},404);
  }catch(error){return sharedReply_({error:error.message||'Google 저장 오류'},error.conflict?409:500)}finally{lock.releaseLock()}

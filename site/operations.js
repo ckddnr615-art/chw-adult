@@ -4,16 +4,27 @@ let applyingTeam=false,configBaseline=null,configPending=false,configTimer,confi
 let configConflict=null;
 let configRetryable=false;
 const monthRevisions=new Map(),attendanceRequests=new Map();
+const attendanceRecordRevisions=new Map();
+let latestAttendanceRevision=0;
 const configSaveWaiters=[];
 const CONFIG_TYPES=['communities','members','areas','programs','schedules','staff','caseAssignments','enrollments','scheduleOverrides','closures','banners'];
 const originalPersist=persist,previousOperationsRender=render,previousOperationsBind=bindManagement,previousPhotoEditor=openEditor;
 let lastScheduleJSON=JSON.stringify([management.data.schedules,management.data.scheduleOverrides,management.data.closures,management.data.programs.map(p=>[p.id,p.enabledHistory||[]])]);
 function currentConfig(){return Object.fromEntries(CONFIG_TYPES.map(type=>[type,JSON.parse(JSON.stringify(management.data[type]||[]))]))}
-async function teamRequest(path,input){const response=await fetch('/api/team/'+path,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(input)});let result;try{result=await response.json()}catch{throw Error('서버 응답을 확인하지 못했습니다.')}if(!response.ok||result.ok===false)throw Object.assign(Error(result.error||'서버 저장 실패'),{status:response.status,conflict:result.conflict||response.status===409,currentStatus:result.currentStatus,retryable:result.busy===true||response.status===503});return result}
+async function teamRequest(path,input){
+  const response=await fetch('/api/team/'+path,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(input)});
+  let result;
+  try{result=await response.json()}catch{throw Error('서버 응답을 확인하지 못했습니다.')}
+  if(!response.ok||result.ok===false)throw Object.assign(Error(result.error||'서버 저장 실패'),{
+    status:response.status,conflict:result.conflict||response.status===409,currentStatus:result.currentStatus,
+    code:result.code,date:result.date,revision:result.revision,retryable:result.busy===true||response.status===503
+  });
+  return result;
+}
 async function loadTeamMonth(month=date.slice(0,7),full=false){
   await ensureHolidayYear(month.slice(0,4)).catch(()=>{});
   const since=full?0:monthRevisions.get(month)||0,response=await fetch(`/api/team/state?month=${month}&since=${since}`,{credentials:'same-origin'});if(!response.ok)throw Error('공유 자료를 읽지 못했습니다.');const data=await response.json();if(!data.initialized)return false;
-  if(data.revision<Math.max(0,...monthRevisions.values()))return true;
+  if(data.revision<Math.max(latestAttendanceRevision,...monthRevisions.values()))return true;
   if(!data.unchanged){applyingTeam=true;try{if(data.config&&!configPending&&!configSaving){for(const type of CONFIG_TYPES)management.data[type]=data.config[type]||[];management.data.timetableVersion=1;configBaseline=currentConfig();management.upgradeTimetable()}Object.assign(records,data.records);Object.assign(management.data.days,data.days);for(const entry of data.entries||[]){const index=management.data.entries.findIndex(e=>e.id===entry.id);if(index<0)management.data.entries.push(entry);else management.data.entries[index]=entry}if(adminSession||team.authenticated)management.data.audit=(data.audit||[]).slice().sort((a,b)=>a.time.localeCompare(b.time));originalPersist();refreshCollections();lastScheduleJSON=JSON.stringify([management.data.schedules,management.data.scheduleOverrides,management.data.closures,management.data.programs.map(p=>[p.id,p.enabledHistory||[]])])}finally{applyingTeam=false}}
   if(!configPending&&!configSaving)monthRevisions.set(month,data.revision);team.active=true;team.initialized=true;return true;
 }
@@ -53,18 +64,33 @@ persist=function(){
   lastScheduleJSON=scheduleJSON;
   const result=originalPersist();if(result&&!applyingTeam&&team.active&&team.authenticated){configPending=true;clearTimeout(configTimer);configTimer=setTimeout(saveTeamConfig,180)}return result;
 };
+function applyAttendanceReceipt(memberId,day,value,revision){
+  const key=day+':'+memberId;
+  if(revision&&revision<Math.max(attendanceRecordRevisions.get(key)||0,...monthRevisions.values()))return;
+  if(revision){
+    latestAttendanceRevision=Math.max(latestAttendanceRevision,revision);
+    attendanceRecordRevisions.set(key,revision);
+  }
+  records[key]=value;
+}
 async function commitAttendance(memberId,d,value,publicCheckin=false){if(!team.active)throw Error('Google 공동 저장 연결 후 출석할 수 있습니다.');
-  await ensureHolidayYear(d.slice(0,4));if(publicCheckin&&management.holidayName(d))throw Error(management.holidayName(d)+' · 오늘은 쉬는 날입니다.');
+  if(!publicCheckin)await ensureHolidayYear(d.slice(0,4));
   if(team.active){
     const key=memberId+':'+d+':'+value,requestId=attendanceRequests.get(key)||crypto.randomUUID();attendanceRequests.set(key,requestId);
     const expectedStatus=records[d+':'+memberId]||'';
-    let result;for(let n=0;n<3;n++){try{result=await teamRequest(publicCheckin?'checkin':'attendance',{memberId,date:d,status:value,requestId,expectedStatus});break}catch(error){
-      if(error.currentStatus!==undefined){attendanceRequests.delete(key);records[d+':'+memberId]=error.currentStatus;render();throw error}
+    let result;for(let n=0;n<3;n++){try{result=await teamRequest(publicCheckin?'checkin':'attendance',{memberId,date:d,status:value,requestId,expectedStatus,deferReports:publicCheckin});break}catch(error){
+      if(error.currentStatus!==undefined){
+        attendanceRequests.delete(key);
+        applyAttendanceReceipt(memberId,error.date||d,error.currentStatus,error.revision);
+        render();
+        throw error;
+      }
       if(n===2||error.status>=400&&error.status<500&&error.status!==409)throw error;
       await new Promise(resolve=>setTimeout(resolve,250*(n+1)+Math.random()*250));
     }}
     attendanceRequests.delete(key);
-    records[d+':'+memberId]=result.status??value;
+    applyAttendanceReceipt(memberId,result.date||d,result.status??value,result.revision);
+    if(publicCheckin){render();return result}
     try{await loadTeamMonth(d.slice(0,7))}catch{team.error='출결 저장 완료 · 최신 자료를 다시 확인해 주세요.'}
     render();return result;
   }
@@ -141,16 +167,81 @@ function attendanceReportMessage(result){
   if(!receipt)return '출석은 저장됐어요. 프로그램 기록은 직원이 확인해 주세요.';
   if(receipt.noSchedule)return '출석은 저장됐어요. 오늘 참여할 프로그램 등록을 직원에게 요청해 주세요.';
   if(receipt.mappingMissing||receipt.failed)return '출석은 저장됐어요. 프로그램 기록을 시트에 옮기지 못했어요. 직원에게 알려 주세요.';
-  if(receipt.pending)return '출석은 저장됐어요. 프로그램 기록을 시트에 옮기는 중이에요.';
+  if(receipt.pending)return '출석은 저장됐어요. 프로그램 기록은 시트에 자동으로 반영돼요.';
   return `출석과 영역 실적 ${receipt.synced}건의 시트 저장을 확인했어요.`;
 }
-function bindPublicCheckins(){if(!team.active){document.querySelectorAll('[data-checkin]').forEach(button=>{button.disabled=true;button.title='Google 공동 저장을 연결한 뒤 출석할 수 있습니다.'});return;}document.querySelectorAll('[data-checkin]').forEach(button=>button.onclick=()=>{
-  const member=management.find('members',button.dataset.checkin);if(status(member)==='출석'){modal(`<h2>${esc(member.name)} 님,<br>오늘 출석했어요.</h2><p>다시 누르지 않아도 괜찮아요.</p>`);return}
-  modal(`${photoMarkup(member,'confirm-portrait')}<h2>${esc(member.name)} 님이 맞나요?</h2><p>이름이 맞으면 출석 버튼을 눌러 주세요.</p>${personalDaySummary(member)}<button id="autoConfirmCheckin" class="primary">네, 출석할게요</button>`);void hydratePhotos();$('#closeDialog').textContent='아니요, 다시 고를게요';
-  $('#autoConfirmCheckin').onclick=async()=>{const nonce=crypto.randomUUID();$('#dialog').dataset.operation=nonce;$('#dialogcontent').innerHTML=`<span class="saving-spinner" aria-hidden="true"></span><h2>출석을 기록하고 있어요</h2><p>${esc(member.name)} 님, 잠시만 기다려 주세요.</p>`;$('#closeDialog').textContent='창 닫기';await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));try{const result=await commitAttendance(member.id,date,'출석',true);if($('#dialog').open&&$('#dialog').dataset.operation===nonce){$('#dialogcontent').innerHTML=`<span class="successmark">✓</span><h2>${esc(member.name)} 님,<br>출석했어요.</h2><p>${prettyDate}</p><p class="completion-meta">${esc(attendanceReportMessage(result))}</p>`;$('#closeDialog').textContent='확인했어요';say(member.name+' 님 출석했어요.')}}catch(error){if($('#dialog').open&&$('#dialog').dataset.operation===nonce){$('#dialogcontent').innerHTML=`<h2>기록을 확인하지 못했어요</h2><p>${esc(error.message)}</p><p>창을 닫고 이름을 다시 눌러 주세요. 같은 요청으로 중복 없이 확인합니다.</p>`;$('#closeDialog').textContent='이름으로 돌아가기'}}};
-})}
+const absenceMessage='오늘 못 와요로 기록되어 있어요. 출석하려면 직원에게 알려 주세요.';
+function showAbsenceNotice(){
+  const content='<h2>오늘 못 와요</h2><p>'+absenceMessage+'</p>';
+  if($('#dialog').open)$('#dialogcontent').innerHTML=content;
+  else modal(content);
+  $('#closeDialog').textContent='알겠어요';
+  say(absenceMessage);
+}
+function bindPublicCheckins(){
+  for(const button of document.querySelectorAll('[data-checkin]')){
+    if(!team.active){
+      button.disabled=true;
+      button.title='Google 공동 저장을 연결한 뒤 출석할 수 있습니다.';
+      continue;
+    }
+    button.onclick=()=>{
+      const member=management.find('members',button.dataset.checkin);
+      const current=status(member);
+      if(current==='결석'){showAbsenceNotice();return}
+      if(current==='출석'){
+        modal('<h2>'+esc(member.name)+' 님,<br>오늘 출석했어요.</h2><p>다시 누르지 않아도 괜찮아요.</p>');
+        return;
+      }
+      modal(photoMarkup(member,'confirm-portrait')+'<h2>'+esc(member.name)+' 님이 맞나요?</h2>'+
+        '<p>이름이 맞으면 출석 버튼을 눌러 주세요.</p>'+personalDaySummary(member)+
+        '<button id="autoConfirmCheckin" class="primary">네, 출석할게요</button>');
+      void hydratePhotos();
+      $('#closeDialog').textContent='아니요, 다시 고를게요';
+      $('#autoConfirmCheckin').onclick=async()=>{
+        if(status(member)==='결석'){showAbsenceNotice();return}
+        const dialog=$('#dialog'),nonce=crypto.randomUUID();
+        dialog.dataset.operation=nonce;
+        const isCurrent=()=>dialog.open&&dialog.dataset.operation===nonce;
+        $('#dialogcontent').innerHTML='<span class="saving-spinner" aria-hidden="true"></span><h2>출석을 기록하고 있어요</h2><p>'+
+          esc(member.name)+' 님, 잠시만 기다려 주세요.</p>';
+        $('#closeDialog').textContent='창 닫기';
+        await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+        try{
+          const result=await commitAttendance(member.id,date,'출석',true);
+          if(!isCurrent())return;
+          if(status(member)==='결석'){showAbsenceNotice();return}
+          $('#dialogcontent').innerHTML='<span class="successmark">✓</span><h2>'+esc(member.name)+
+            ' 님,<br>출석했어요.</h2><p>'+prettyDate+'</p><p class="completion-meta">'+esc(attendanceReportMessage(result))+'</p>';
+          $('#closeDialog').textContent='확인했어요';
+          say(member.name+' 님 출석했어요.');
+        }catch(error){
+          if(!isCurrent())return;
+          if(error.code==='ABSENCE_LOCKED'){showAbsenceNotice();return}
+          $('#dialogcontent').innerHTML='<h2>기록을 확인하지 못했어요</h2><p>'+esc(error.message)+
+            '</p><p>창을 닫고 이름을 다시 눌러 주세요. 같은 요청으로 중복 없이 확인합니다.</p>';
+          $('#closeDialog').textContent='이름으로 돌아가기';
+        }
+      };
+    };
+  }
+}
 bindManagement=function(page){
   previousOperationsBind(page);bindClosureManagement();if(page==='appearance')bindBannerSettings();if(page==='kiosk')bindPublicCheckins();
+  if(page==='operations'){
+    const controls=document.querySelectorAll('[data-kiosk-move]');
+    controls.forEach(button=>button.onclick=async()=>{
+      if(team.error){toast(team.error);return}
+      const id=button.dataset.kioskAffiliation,direction=Number(button.dataset.kioskMove);
+      if(!transaction(()=>management.moveKioskAffiliation(id,direction)))return;
+      controls.forEach(control=>{control.disabled=true});
+      if(team.active)await saveTeamConfig();
+      render();
+      const options=[...document.querySelectorAll('[data-kiosk-move]')].filter(control=>control.dataset.kioskAffiliation===id&&!control.disabled);
+      (options.find(control=>Number(control.dataset.kioskMove)===direction)||options[0])?.focus();
+      toast(team.error||'출석 화면 소속 순서를 저장했습니다.');
+    });
+  }
   if(page==='login'){
     $('#loginHint').textContent=team.local||!team.loading&&!team.configured?'로컬 미리보기 비밀번호는 demo1234입니다.':'기존 관리자 비밀번호를 입력해 주세요.';
     $('#loginForm').onsubmit=async event=>{

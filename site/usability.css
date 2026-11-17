@@ -44,6 +44,7 @@ body:not(.participant-mode) dialog:has(.assignment-picker){width:760px;max-width
 @media(max-width:760px){.participant-mode .kiosk-flow .compact-picker .groupchoice,.participant-mode .kiosk-flow .compact-picker .groupchoice.selected{grid-template-rows:minmax(40px,auto) 20px}.kiosk-flow .compact-picker .choicecheck{min-height:20px}}
 @media(max-width:760px){.participant-mode .kiosk-flow .compact-picker .groupchoice,.participant-mode .kiosk-flow .compact-picker .groupchoice.selected{grid-template-rows:48px 20px;min-height:100px}}
 .banner-slot-tabs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.banner-slot-tabs button{margin:0}
+.banner-slot-tabs #swapBannerPhotos{grid-column:1/-1}
 .program-workspace-actions{display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin:18px 0 28px}.program-workspace-actions .secondary{display:inline-flex;align-items:center;min-height:44px;padding:12px 18px;border:1px solid #d2deed;border-radius:10px;background:#fff;color:#345591}.weekly-timetable td[rowspan]{vertical-align:top}
 .banner-photo-fields .checklabel{display:flex;align-items:center;gap:10px}.banner-photo-fields .checklabel input[type=checkbox]{width:18px;height:18px;min-height:18px;padding:0}
 
