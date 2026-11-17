@@ -162,14 +162,6 @@ function staffAttendanceMessage(result){
   if(receipt.noSchedule)return '출결 저장 완료 · 배정 프로그램을 확인해 주세요.';
   return '출결과 실적 시트 반영을 확인했습니다.';
 }
-function attendanceReportMessage(result){
-  const receipt=result?.reportReceipt;
-  if(!receipt)return '출석은 저장됐어요. 프로그램 기록은 직원이 확인해 주세요.';
-  if(receipt.noSchedule)return '출석은 저장됐어요. 오늘 참여할 프로그램 등록을 직원에게 요청해 주세요.';
-  if(receipt.mappingMissing||receipt.failed)return '출석은 저장됐어요. 프로그램 기록을 시트에 옮기지 못했어요. 직원에게 알려 주세요.';
-  if(receipt.pending)return '출석은 저장됐어요. 프로그램 기록은 시트에 자동으로 반영돼요.';
-  return `출석과 영역 실적 ${receipt.synced}건의 시트 저장을 확인했어요.`;
-}
 const absenceMessage='오늘 못 와요로 기록되어 있어요. 출석하려면 직원에게 알려 주세요.';
 let kioskRefreshQueued=false;
 function refreshKioskAfterDialog(){
@@ -214,21 +206,26 @@ function bindPublicCheckins(){
       $('#closeDialog').textContent='아니요, 다시 고를게요';
       $('#autoConfirmCheckin').onclick=async()=>{
         if(status(member)==='결석'){showAbsenceNotice();return}
-        const dialog=$('#dialog'),nonce=crypto.randomUUID();
-        dialog.dataset.operation=nonce;
-        const isCurrent=()=>dialog.open&&dialog.dataset.operation===nonce;
+        const dialog=$('#dialog');
         $('#dialogcontent').innerHTML='<span class="saving-spinner" aria-hidden="true"></span><h2>출석을 기록하고 있어요</h2><p>'+
           esc(member.name)+' 님, 잠시만 기다려 주세요.</p>';
+        const spinner=dialog.querySelector('.saving-spinner');
+        const isCurrent=()=>dialog.open&&dialog.contains(spinner);
         $('#closeDialog').textContent='창 닫기';
         try{
-          const result=await commitAttendance(member.id,date,'출석',true);
+          await commitAttendance(member.id,date,'출석',true);
           refreshKioskAfterDialog();
           if(!isCurrent())return;
           if(status(member)==='결석'){showAbsenceNotice();return}
-          $('#dialogcontent').innerHTML='<span class="successmark">✓</span><h2>'+esc(member.name)+
-            ' 님,<br>출석했어요.</h2><p>'+prettyDate+'</p><p class="completion-meta">'+esc(attendanceReportMessage(result))+'</p>';
-          $('#closeDialog').textContent='확인했어요';
+          $('#dialogcontent').innerHTML='<div role="status" class="kiosk-checkin-success"><span class="successmark" aria-hidden="true">✓</span><h2>'+
+            esc(member.name)+' 님,<br>출석이 완료됐어요.</h2></div>';
+          $('#closeDialog').textContent='닫기';
           say(member.name+' 님 출석했어요.');
+          const success=dialog.querySelector('.kiosk-checkin-success');
+          const timer=setTimeout(()=>{
+            if(dialog.open&&dialog.contains(success))dialog.close();
+          },4000);
+          dialog.addEventListener('close',()=>clearTimeout(timer),{once:true});
         }catch(error){
           if(error.currentStatus!==undefined)refreshKioskAfterDialog();
           if(!isCurrent())return;
