@@ -52,8 +52,9 @@
         if((fields.facilitatorIds||[]).some(id=>!this.list('staff').some(s=>s.id===id)))throw Error('진행 직원을 확인해 주세요.');
       }
       const old=this.data.scheduleOverrides.find(o=>o.scheduleId===scheduleId&&o.date===d&&o.active!==false);
-      const item={...clone(fields),id:old?.id||uid(),scheduleId,date:d,active:true};
-      if(old)this.data.scheduleOverrides[this.data.scheduleOverrides.indexOf(old)]=item;else this.data.scheduleOverrides.push(item);
+      const archived=this.data.scheduleOverrides.find(o=>o.scheduleId===scheduleId&&o.date===d);
+      const item={...clone(fields),id:old?.id||archived?.id||(scheduleId+':'+d),scheduleId,date:d,active:true};
+      if(old||archived)this.data.scheduleOverrides[this.data.scheduleOverrides.indexOf(old||archived)]=item;else this.data.scheduleOverrides.push(item);
       this.audit('그날만 변경','scheduleOverrides',item.id,old,item);return item;
     }
     resetDayOverride(scheduleId,d){const old=this.data.scheduleOverrides.find(o=>o.scheduleId===scheduleId&&o.date===d&&o.active!==false);if(old){const before=clone(old);old.active=false;this.audit('그날 변경 취소','scheduleOverrides',old.id,before,old)}}
@@ -139,13 +140,19 @@
     holidayName(d){return [this.holidays?.[d],...(this.data.closures||[]).filter(c=>c.active!==false&&ManagementStore.closureContains(c,d)).map(c=>c.name)].filter(Boolean).join(' · ')}
     programEnabled(id,d){const p=this.find('programs',id);return !!p&&p.active!==false&&([...p.enabledHistory||[]].filter(h=>h.from<=d).sort((a,b)=>a.from.localeCompare(b.from)).slice(-1)[0]?.enabled??true)}
     setProgramEnabled(id,enabled,from){const p=this.find('programs',id);if(!p||p.active===false)throw Error('사용 중인 프로그램을 선택해 주세요.');if(typeof enabled!=='boolean'||!/^\d{4}-\d{2}-\d{2}$/.test(from))throw Error('운영 상태를 확인해 주세요.');const before=clone(p);p.enabledHistory=[...(p.enabledHistory||[]).filter(h=>h.from!==from),{from,enabled}];this.audit(enabled?'프로그램 활성화':'프로그램 비활성화','programs',id,before,p)}
+    afternoonClosed(d){
+      return Number(d.slice(8,10))<=7&&new Date(d+'T12:00:00Z').getUTCDay()===3;
+    }
     schedulesOn(d){
       if(this.holidayName(d))return [];
       const weekday=new Date(d+'T12:00:00Z').getUTCDay();
+      const afternoonClosed=this.afternoonClosed(d);
       const resolved=this.list('schedules').filter(s=>(s.date?s.date===d:s.weekdays.includes(weekday))&&(!s.validFrom||s.validFrom<=d)&&(!s.validTo||s.validTo>=d)).map(base=>{
         const override=this.data.scheduleOverrides.find(o=>o.active!==false&&o.scheduleId===base.id&&o.date===d);
         if(override?.kind==='cancel')return null;
         const item={...base,...(override||{}),id:base.id,baseScheduleId:base.id,overrideId:override?.id||'',isException:!!override,changeReason:override?.reason||''};
+        if(afternoonClosed&&item.start>='13:00')return null;
+        if(afternoonClosed&&item.end>'13:00')item.end='13:00';
         const program=this.find('programs',item.programId);if(!program||!this.programEnabled(program.id,d)||!this.programEnabled(base.programId,d))return null;
         const area=this.find('areas',program.areaId);if(!area)return null;
         // A one-day replacement keeps the original audience and owning community.
@@ -157,28 +164,62 @@
       const dated=resolved.filter(s=>this.find('schedules',s.id)?.date===d&&s.audienceMode!=='individual');
       return resolved.filter(s=>this.find('schedules',s.id)?.date===d||!dated.some(one=>one.communityId===s.communityId&&one.start<s.end&&s.start<one.end));
     }
-    setParticipation(memberId,scheduleId,d,checked){
+    entryMatchesSchedule(entry,schedule){
+      return entry.scheduleId===schedule.id&&entry.programId===schedule.program.id&&
+        entry.areaId===schedule.area.id&&entry.area===schedule.area.name&&
+        entry.program===schedule.program.name&&entry.staff===schedule.program.staff&&
+        entry.start===schedule.start&&entry.end===schedule.end;
+    }
+    setParticipation(memberId,scheduleId,d,checked,{entryId='',allowUnassigned=false,matchCurrent=false}={}){
       const member=this.find('members',memberId),schedule=this.schedulesOn(d).find(s=>s.id===scheduleId);
-      let entry=this.data.entries.find(e=>e.memberId===memberId&&e.scheduleId===scheduleId&&e.date===d);
+      let entry=this.data.entries.find(e=>e.memberId===memberId&&e.scheduleId===scheduleId&&e.date===d&&
+        (entryId?e.id===entryId:!matchCurrent||schedule&&this.entryMatchesSchedule(e,schedule)));
       if(!member||(!schedule&&!entry))throw Error('참여자나 해당 날짜의 일정이 없습니다.');
-      if(!entry&&(!member.active||!this.eligibleMembers(schedule,d).some(m=>m.id===memberId)))throw Error('해당 날짜 소속과 프로그램 커뮤니티가 다릅니다.');
+      if(!entry&&(!member.active||!allowUnassigned&&!this.eligibleMembers(schedule,d).some(m=>m.id===memberId)))throw Error('해당 날짜 소속과 프로그램 커뮤니티가 다릅니다.');
       const before=clone(entry||null);
       if(!entry){const communityId=this.data.days[d+':'+memberId]?.communityId||this.memberGroupAt(member,d);entry={id:uid(),memberId,scheduleId,date:d,name:member.name,communityId,community:this.communityName(communityId),areaId:schedule.area.id,area:schedule.area.name,programId:schedule.program.id,program:schedule.program.name,staff:schedule.program.staff,facilitatorIds:clone(schedule.facilitatorIds||[]),caseManagerId:this.caseManagerAt(memberId,d),start:schedule.start,end:schedule.end,version:0,createdAt:new Date().toISOString()};this.data.entries.push(entry)}
       entry.checked=!!checked;entry.version++;entry.sync='pending';entry.updatedAt=new Date().toISOString();entry.error='';this.audit(checked?'참여 체크':'참여 취소','entries',entry.id,before,entry);return entry;
     }
     editEntry(id,fields){const e=this.find('entries',id);if(!e)throw Error('실적이 없습니다.');const before=clone(e);for(const k of ['name','area','program','staff']){const v=String(fields[k]??e[k]).trim();if(!v||v.length>100)throw Error('실적 항목을 1~100자로 입력해 주세요.');e[k]=v}e.version++;e.updatedAt=new Date().toISOString();e.sync='pending';e.error='';this.audit('실적 정정','entries',id,before,e);return e}
     deleteEntry(id){const e=this.find('entries',id);if(!e)throw Error('실적이 없습니다.');const before=clone(e);e.checked=false;e.version++;e.sync='pending';e.updatedAt=new Date().toISOString();this.audit('실적 삭제','entries',id,before,e);return e}
-    applyAttendance(records,memberId,d,nextStatus){
+    setProgramAttendance(records,{memberId,date,scheduleId,entryId,expectedVersion,checked},actor=''){
+      if(records[date+':'+memberId]!=='출석')throw Error('먼저 그날의 일일 출석을 확인해 주세요.');
+      const schedule=this.schedulesOn(date).find(s=>s.id===scheduleId);
+      const existing=this.data.entries.find(e=>e.date===date&&e.memberId===memberId&&e.scheduleId===scheduleId&&
+        (entryId?e.id===entryId:schedule&&this.entryMatchesSchedule(e,schedule)));
+      if(entryId&&!existing||Number(existing?.version||0)!==expectedVersion)throw Object.assign(Error('다른 직원이 참여 실적을 먼저 수정했습니다. 최신 기록을 확인해 주세요.'),{conflict:true});
+      if(!existing&&(!schedule||!checked))throw Error('정정할 프로그램을 확인해 주세요.');
+      const entry=this.setParticipation(memberId,scheduleId,date,checked,{entryId,allowUnassigned:checked,matchCurrent:true});
+      entry.participationOverride=checked?'include':'exclude';
+      entry.correctedBy=actor;
+      return entry;
+    }
+    applyAttendance(records,memberId,d,nextStatus,recalculate=false){
       if(!['출석','결석',''].includes(nextStatus))throw Error('출석·결석·미입력 중 선택해 주세요.');
       const member=this.find('members',memberId);if(!member)throw Error('참여자를 찾을 수 없습니다.');
       this.captureDays(records);const key=d+':'+memberId,previous=records[key]||'';records[key]=nextStatus;this.captureDays(records);
       let generated=0,cancelled=0;
       if(nextStatus==='출석'){
         if(member.active===false&&previous!=='출석')throw Error('삭제한 참여자는 복구 후 출석을 입력해 주세요.');
-        const schedules=this.personalSchedules(memberId,d),valid=new Set(schedules.map(s=>s.id));
-        // Reconcile only this person's date. Frozen metadata of already-created entries is retained.
-        for(const e of this.data.entries.filter(e=>e.memberId===memberId&&e.date===d&&e.checked&&!valid.has(e.scheduleId))){this.deleteEntry(e.id);cancelled++}
-        for(const schedule of schedules){let e=this.data.entries.find(e=>e.memberId===memberId&&e.scheduleId===schedule.id&&e.date===d);if(!e||!e.checked){e=this.setParticipation(memberId,schedule.id,d,true);e.source=e.source||'arrival_auto';e.basis='scheduled_on_arrival';e.attendanceLinked=true;generated++}}
+        if(previous==='출석'&&!recalculate)return {memberId,date:d,status:nextStatus,generated,cancelled};
+        const schedules=this.personalSchedules(memberId,d);
+        const entries=this.data.entries.filter(e=>e.memberId===memberId&&e.date===d);
+        for(const entry of entries){
+          if(entry.participationOverride==='include'){
+            if(!entry.checked)this.setParticipation(memberId,entry.scheduleId,d,true,{entryId:entry.id});
+          }else if(entry.checked&&!schedules.some(s=>this.entryMatchesSchedule(entry,s))){
+            this.deleteEntry(entry.id);cancelled++;
+          }
+        }
+        for(const schedule of schedules){
+          if(entries.some(e=>e.scheduleId===schedule.id&&e.programId===schedule.program.id&&e.participationOverride==='exclude'))continue;
+          if(entries.some(e=>this.entryMatchesSchedule(e,schedule)&&e.checked))continue;
+          const entry=this.setParticipation(memberId,schedule.id,d,true,{matchCurrent:true});
+          entry.source=entry.source||'arrival_auto';
+          entry.basis='scheduled_on_arrival';
+          entry.attendanceLinked=true;
+          generated++;
+        }
       }else for(const e of this.data.entries.filter(e=>e.memberId===memberId&&e.date===d&&e.checked)){this.deleteEntry(e.id);e.cancelReason=nextStatus==='결석'?'출결 결석 변경':'출결 미입력 변경';cancelled++}
       if(previous!==nextStatus)this.audit('출결 변경','days',key,previous,nextStatus);
       return {memberId,date:d,status:nextStatus,generated,cancelled};
