@@ -42,25 +42,42 @@ if(typeof module!=='undefined')module.exports=programAttendanceGroups;
 
 let programAttendanceDate='',programAttendanceStaff='';
 const openProgramGroups=new Set();
-let deskStaff='';
+let deskStaff=null;
+
+function staffScheduleTable(store,day,selectedStaff){
+  const schedules=store.schedulesOn(day);
+  if(!schedules.length)return '<p class="staff-desk-empty">오늘 운영하는 프로그램이 없습니다.</p>';
+
+  const periodNames=new Map(ManagementStore.timeSlots().map(slot=>[slot.id,slot.name]));
+  const rows=schedules.map(item=>{
+    const assigned=Boolean(selectedStaff&&item.facilitatorIds.includes(selectedStaff));
+    const staff=store.staffNames(item.facilitatorIds);
+    const period=periodNames.get(ManagementStore.scheduleSlot(item));
+    return `<tr${assigned?' class="staff-desk-assigned"':''}>
+      <td><strong>${esc(period)}</strong><span class="staff-desk-detail staff-desk-time"><time>${esc(item.start)}</time> ~ <time>${esc(item.end)}</time></span></td>
+      <th scope="row">${esc(item.program.name)}<span class="staff-desk-detail">${esc(item.location||'장소 미정')}${item.isException?' · 오늘 변경':''}</span></th>
+      <td class="staff-desk-names">${staff?esc(staff):'<span class="staff-desk-unassigned">미지정</span>'}</td>
+    </tr>`;
+  }).join('');
+  return `<table class="staff-desk-table" aria-labelledby="staffScheduleTitle">
+    <thead><tr><th scope="col">시간대</th><th scope="col">프로그램 · 장소</th><th scope="col">전담 담당자</th></tr></thead>
+    <tbody>${rows}</tbody></table>`;
+}
 
 function showStaffDesk(){
   const staff=management.list('staff');
-  if(!staff.length)return;
-  const id=deskStaff||team.staffId||'';
+  const id=deskStaff??team.staffId??'';
   const members=id?management.list('members').filter(member=>management.caseManagerAt(member.id,date)===id):[];
-  const schedules=id?management.schedulesOn(date).filter(item=>item.facilitatorIds?.includes(id)):[];
-  $('#main').insertAdjacentHTML('beforeend',`<section class="panel program-attendance">
-    <h2>담당 직원 오늘 업무</h2>
-    <div class="filters"><label>담당 직원 <select id="deskStaff"><option value="">직원을 선택해 주세요</option>${opts(staff,id)}</select></label></div>
-    ${id?`<h3>담당 참여자 · ${members.length}명</h3>
-      <p>${members.map(member=>esc(member.name)+' ('+(records[date+':'+member.id]||'미입력')+')').join(' · ')||'담당 참여자가 없습니다.'}</p>
-      <h3>진행 프로그램 · ${schedules.length}개</h3>
-      <ul>${schedules.map(item=>`<li>${esc(item.start)} ~ ${esc(item.end)} · ${esc(item.program.name)}${item.isException?' · 오늘 변경':''}</li>`).join('')||'<li>오늘 진행 프로그램이 없습니다.</li>'}</ul>
-      <a href="#attendance" id="deskProgramAttendance">프로그램별 출결 확인 ↗</a>`:''}
+  $('#main .metrics').insertAdjacentHTML('afterend',`<section class="panel staff-desk" aria-labelledby="staffDeskTitle">
+    <div class="panelhead staff-desk-heading"><h2 id="staffDeskTitle">담당 직원 오늘 업무</h2>
+      <a href="#attendance" class="textbutton" id="deskProgramAttendance">프로그램별 출결 확인 ↗</a></div>
+    <h3 id="staffScheduleTitle">오늘 프로그램 전담 담당자</h3>
+    ${staffScheduleTable(management,date,id)}
+    ${staff.length?`<div class="staff-desk-cases"><div class="filters"><label>사례관리 담당 직원<select id="deskStaff"><option value="">직원을 선택해 주세요</option>${opts(staff,id)}</select></label></div>
+      ${id?`<h3>담당 참여자 · ${members.length}명</h3><p>${members.map(member=>esc(member.name)+' ('+esc(records[date+':'+member.id]||'미입력')+')').join(' · ')||'담당 참여자가 없습니다.'}</p>`:''}</div>`:''}
   </section>`);
-  $('#deskStaff').onchange=event=>{deskStaff=event.target.value;render()};
-  if($('#deskProgramAttendance'))$('#deskProgramAttendance').onclick=()=>{programAttendanceStaff=id;programAttendanceDate=date};
+  if($('#deskStaff'))$('#deskStaff').onchange=event=>{deskStaff=event.target.value;render();$('#deskStaff')?.focus()};
+  $('#deskProgramAttendance').onclick=()=>{programAttendanceStaff='';programAttendanceDate=date};
 }
 
 function programAttendancePanel(){

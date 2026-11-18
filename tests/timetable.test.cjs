@@ -80,3 +80,25 @@ test('종일 프로그램은 첫 수요일에 오전 운영만 남긴다',()=>{
  assert.equal(Store.scheduleSlot(restricted),'morning');
  assert.equal(Store.inParticipationPeriod(restricted,'pm'),false);
 });
+
+
+test('출석 화면의 오늘 일정은 오전·오후·종일로 나누고 선택한 소속의 개인 배정을 포함한다',()=>{
+ const {readFileSync}=require('node:fs'),{runInNewContext}=require('node:vm');
+ const source=readFileSync(require.resolve('../site/usability.js'),'utf8');
+ const show=runInNewContext(source.slice(source.indexOf('function daySchedulePeriods('),source.indexOf('function persistentCommunityPicker('))+'\nkioskDaySchedule',{ManagementStore:Store,esc:String});
+ const store=fixture(),day='2026-11-11',staff=store.list('staff')[0];
+ const add=(name,start,end,audienceMode,location)=>{
+   const program=store.save('programs','',{name,areaId:'area-1',facilitatorIds:[staff.id]},day);
+   return store.save('schedules','',{programId:program.id,date:day,start,end,audienceMode,location,communityId:''},day);
+ };
+ const pm=add('개인 오후 활동','13:00','14:00','individual','다목적실');
+ store.assignParticipants(pm.id,['member-1'],day,'individual');
+ const allDay=add('종일 체험','10:00','15:40','individual','지역사회');
+ store.assignParticipants(allDay.id,['member-2'],day,'individual');
+ const first=show(store,day,store.find('communities','community-1'));
+ assert.match(first,/오전 프로그램[\s\S]*건강활동[\s\S]*오후 프로그램[\s\S]*개인 오후 활동[\s\S]*다목적실/);
+ assert.doesNotMatch(first,/종일 체험|출석 기록됨/);
+ const all=show(store,day);
+ assert.match(all,/종일 프로그램[\s\S]*종일 체험[\s\S]*지역사회/);
+ assert.equal((all.match(/>종일 체험</g)||[]).length,1);
+});

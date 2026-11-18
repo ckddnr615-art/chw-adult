@@ -9,3 +9,27 @@ test('기본 정보만 수정하면 반복 일정을 불필요하게 분리하�
 test('수정 일정에 오류가 있으면 프로그램 이름도 되돌린다',()=>{const f=fixture(),r=context.saveProgramWithSchedule(f.store,f.program,f.schedule,'2026-10-29'),before=JSON.stringify(f.store.data);assert.throws(()=>context.updateProgramWithSchedule(f.store,r.program.id,r.schedule.id,{...f.program,name:'실패 이름'},{...f.schedule,start:'17:00'},'2026-10-29'));assert.equal(JSON.stringify(f.store.data),before)});
 test('프로그램 비활성화·재활성화는 날짜별 이력을 유지한다',()=>{const f=fixture(),r=context.saveProgramWithSchedule(f.store,f.program,f.schedule,'2026-10-29');f.store.setProgramEnabled(r.program.id,false,'2026-11-04');assert.equal(f.store.schedulesOn('2026-11-02').some(s=>s.id===r.schedule.id),true);assert.equal(f.store.schedulesOn('2026-11-04').some(s=>s.id===r.schedule.id),false);f.store.setProgramEnabled(r.program.id,true,'2026-11-06');assert.equal(f.store.schedulesOn('2026-11-04').some(s=>s.id===r.schedule.id),false);assert.equal(f.store.schedulesOn('2026-11-06').some(s=>s.id===r.schedule.id),true)});
 test('프로그램 삭제는 연결 일정을 지우지 않고 복구할 수 있다',()=>{const f=fixture(),r=context.saveProgramWithSchedule(f.store,f.program,f.schedule,'2026-10-29');f.store.remove('programs',r.program.id);assert.ok(f.store.find('schedules',r.schedule.id));assert.equal(f.store.schedulesOn('2026-11-02').some(s=>s.id===r.schedule.id),false);f.store.find('programs',r.program.id).active=true;assert.equal(f.store.schedulesOn('2026-11-02').some(s=>s.id===r.schedule.id),true)});
+
+
+test('오늘 담당자 표는 당일 대체 담당자와 장소를 표시하고 취소된 일정은 제외한다',()=>{
+ const {store,program,schedule}=fixture(),day='2026-11-11',base='schedule-1';
+ const caseStaff=store.save('staff','',{name:'사례관리 직원'},day);
+ const substitute=store.save('staff','',{name:'대체 담당자'},day);
+ const partner=store.save('staff','',{name:'공동 담당자'},day);
+ store.setDayOverride(base,day,{kind:'replace',programId:'program-1',displayName:'당일 활동',start:'10:00',end:'15:40',location:'다목적실',facilitatorIds:[substitute.id,partner.id],reason:'담당자 변경'});
+ const pm=context.saveProgramWithSchedule(store,{...program,name:'취소된 활동'},
+   {...schedule,date:day,weekdays:[]},day).schedule;
+ store.setDayOverride(pm.id,day,{kind:'cancel',reason:'당일 휴강'});
+ const source=fs.readFileSync(require.resolve('../site/program-attendance.js'),'utf8');
+ const table=vm.runInNewContext(source+'\nstaffScheduleTable',{ManagementStore:Store,esc:String});
+ const html=table(store,day,substitute.id);
+ assert.match(html,/전담 담당자/);
+ assert.match(html,/당일 활동/);
+ assert.match(html,/다목적실 · 오늘 변경/);
+ assert.match(html,/종일/);
+ assert.match(html,/대체 담당자 · 공동 담당자/);
+ assert.match(html,/staff-desk-assigned/);
+ assert.doesNotMatch(html,/사례관리 직원|취소된 활동/);
+ assert.match(table(store,day,caseStaff.id),/대체 담당자 · 공동 담당자/);
+ assert.match(table(store,'2026-11-15',''),/오늘 운영하는 프로그램이 없습니다/);
+});

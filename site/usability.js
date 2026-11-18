@@ -28,10 +28,11 @@ function bindParticipantSearch(){
  paint();
 }
 function personalDaySummary(member){
- const items=management.personalSchedules(member.id,date);
- const period=attendancePeriod(member.id,date);
+ return daySchedulePeriods(management.personalSchedules(member.id,date),'오늘 참여 프로그램',attendancePeriod(member.id,date));
+}
+function daySchedulePeriods(items,description,period){
  const hasAllDay=items.some(item=>ManagementStore.scheduleSlot(item)==='all-day');
- return '<div class="participation-day" aria-label="오늘 참여 프로그램">'+ManagementStore.timeSlots().map(({id,name:label})=>{
+ return '<div class="participation-day" aria-label="'+esc(description)+'">'+ManagementStore.timeSlots().map(({id,name:label})=>{
   const programs=items.filter(item=>ManagementStore.scheduleSlot(item)===id);
   if(id==='all-day'&&!programs.length)return '';
   const recorded=period==='both'||period===(id==='morning'?'am':id==='afternoon'?'pm':null);
@@ -39,6 +40,15 @@ function personalDaySummary(member){
   return '<section><h3>'+label+' 프로그램</h3>'+(lines?'<ul>'+lines+'</ul>':'<p>'+(hasAllDay?'종일 프로그램에 포함돼요.':'예정된 프로그램이 없어요.')+'</p>')+
    (recorded&&(lines||hasAllDay)?'<p class="participation-recorded">✓ '+label+' 출석 기록됨</p>':'')+'</section>';
  }).join('')+'</div>';
+}
+function kioskDaySchedule(store,day,community){
+ const schedules=store.schedulesOn(day).filter(schedule=>{
+  if(!community)return true;
+  if(schedule.audienceMode!=='individual')return schedule.communityId===community.id;
+  return store.eligibleMembers(schedule,day).some(member=>store.memberGroupAt(member,day)===community.id);
+ });
+ const scope=community?.name||'전체 소속';
+ return '<section class="kiosk-day-schedule" aria-labelledby="kioskDayScheduleTitle"><div class="kiosk-day-heading"><h2 id="kioskDayScheduleTitle">오늘 프로그램</h2><span>'+esc(scope)+'</span></div>'+daySchedulePeriods(schedules,scope+' 오늘 프로그램')+'</section>';
 }
 function persistentCommunityPicker(selected){
  const original=management.list('communities');
@@ -50,10 +60,9 @@ function kioskQuickRoster(){
 }
 kiosk=function(){
  const selected=groups.includes(participantGroup),community=management.list('communities').find(c=>c.name===participantGroup),closed=management.holidayName(date);
- const common=selected?management.schedulesOn(date).filter(s=>s.communityId===community?.id&&s.audienceMode!=='individual'):[];
  const holidayPending=!holidayYears.has(date.slice(0,4));
  const message=team.error?'Google 공동 저장 연결 설정이 필요합니다. 직원에게 도움을 요청해 주세요.':closed?`오늘은 ${esc(closed)}입니다. 출석은 직원에게 물어봐 주세요.`:holidayPending?'오늘 활동을 확인하고 있어요. 잠시 기다려 주세요.':management.afternoonClosed(date)?'오늘은 오후 프로그램이 없어요.':'';
- return `<div class="kiosk-flow ${selected?'has-selection':''}"><div class="welcome-line"><span>성인지원팀 · 출석하기</span>${clockMarkup()}</div>${message?`<p class="public-service-notice" role="status">${message}</p>`:''}<div class="compact-welcome">${bannerMarkup('kiosk')}</div>${participantSearchMarkup()}<div class="persistent-kiosk-tools ${selected?'selected-tools':''}">${persistentCommunityPicker(selected)}${kioskQuickRoster()}</div>${selected?`<section id="selectedContent" class="people-stage" aria-labelledby="choosePerson"><div class="sectionintro"><div><p class="selected-affiliation">${esc(participantGroup)}</p><h2 id="choosePerson">내 사진이나 이름을 눌러 주세요</h2><p>내가 맞는지 한 번 더 확인해요.</p></div></div><div class="attendancecards">${people.filter(p=>p.group===participantGroup).map(p=>`<button class="personcard ${participantState(p)}" data-checkin="${esc(p.id)}"><span class="avatar" aria-hidden="true">${esc(p.name.slice(0,1))}</span><b>${esc(p.name)}</b><small>${participantLabel(p)}</small></button>`).join('')||'<p>등록된 사람이 없어요. 직원에게 물어봐 주세요.</p>'}</div></section><details class="kiosk-secondary"><summary>소속의 공통 일정 보기 · ${common.length}개</summary><p>나의 실제 활동은 사진을 누른 뒤 확인할 수 있어요.</p><div class="participant-schedule-grid">${common.map(s=>`<div class="participant-schedule"><div><b>${esc(s.program.name)}</b><p>${esc(s.start)} ~ ${esc(s.end)} · ${esc(s.location)}</p></div></div>`).join('')||'<p>등록된 공통 일정이 없어요.</p>'}</div></details>`:''}<div class="bottomhelp"><span>고르기 어려우신가요?</span><button id="askStaff" class="secondary">직원에게 도움 요청하기</button></div></div>`;
+ return `<div class="kiosk-flow ${selected?'has-selection':''}"><div class="welcome-line"><span>성인지원팀 · 출석하기</span>${clockMarkup()}</div>${message?`<p class="public-service-notice" role="status">${message}</p>`:''}<div class="compact-welcome">${bannerMarkup('kiosk')}</div>${participantSearchMarkup()}<div class="persistent-kiosk-tools ${selected?'selected-tools':''}">${persistentCommunityPicker(selected)}${kioskQuickRoster()}</div>${team.active&&!holidayPending?kioskDaySchedule(management,date,community):''}${selected?`<section id="selectedContent" class="people-stage" aria-labelledby="choosePerson"><div class="sectionintro"><div><p class="selected-affiliation">${esc(participantGroup)}</p><h2 id="choosePerson">내 사진이나 이름을 눌러 주세요</h2><p>내가 맞는지 한 번 더 확인해요.</p></div></div><div class="attendancecards">${people.filter(p=>p.group===participantGroup).map(p=>`<button class="personcard ${participantState(p)}" data-checkin="${esc(p.id)}"><span class="avatar" aria-hidden="true">${esc(p.name.slice(0,1))}</span><b>${esc(p.name)}</b><small>${participantLabel(p)}</small></button>`).join('')||'<p>등록된 사람이 없어요. 직원에게 물어봐 주세요.</p>'}</div></section>`:''}<div class="bottomhelp"><span>고르기 어려우신가요?</span><button id="askStaff" class="secondary">직원에게 도움 요청하기</button></div></div>`;
 };
 const previousPickerBind=bindManagement;
 bindManagement=function(page){
@@ -75,6 +84,6 @@ dashboard=function(){
  const tasks=[[overlaps,'시간이 겹치는 참여자','timetable/personal','명'],[unassigned,'참여자 미배정 일정','programs/schedules','건'],[failed,'실적 전송 오류','workspace','건']].filter(x=>x[0]);
  if(!tasks.length)return output;
  const html=`<section class="attention-strip" aria-labelledby="attentionTitle"><h2 id="attentionTitle">오늘 확인할 일</h2><div>${tasks.map(([count,label,route,unit])=>`<a href="#${route}"><span>${label}</span><strong>${count}${unit} ↗</strong></a>`).join('')}</div><p>시간 중복은 개인별 시간표에서 확인해 주세요. 전송 오류는 조회된 실적 자료 기준입니다.</p></section>`;
- return output.replace('<section class="studio-hero',html+'<section class="studio-hero');
+ return output.replace('<section class="metrics">',html+'<section class="metrics">');
 };
 render();
