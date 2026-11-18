@@ -102,6 +102,16 @@ function sharedCanDeferReports_(){
   cache.put(key,installed?'yes':'no',60);return installed;
  }catch(error){return false}
 }
+function sharedProgramCheckins_(month,date){
+ var groups=Object.create(null);
+ month.entries.forEach(function(entry){
+  if(entry.date!==date||!entry.checked||month.records[date+':'+entry.memberId]!=='출석')return;
+  var key=ManagementStore.programAttendanceKey(entry.scheduleId,entry.programId);
+  if(!groups[key])groups[key]=[];
+  if(!groups[key].includes(entry.memberId))groups[key].push(entry.memberId);
+ });
+ return groups;
+}
 function sharedReportReceipt_(month,memberId,date){
  var reports=Object.keys(month.reports).map(function(id){return month.reports[id]}).filter(function(r){return r.entry.memberId===memberId&&r.entry.date===date});
  var active=reports.filter(function(r){return r.entry.checked}),map={};try{map=JSON.parse(sharedProps_().getProperty('SHEET_TAB_MAP')||'{}')}catch(error){}
@@ -110,7 +120,10 @@ function sharedReportReceipt_(month,memberId,date){
 function sharedApply_(config,month,memberId,date,status,recalculate,actor,preparedModel,participation,locked){
  var model=preparedModel||sharedModel_(config,month);
  if(!preparedModel)model.holidays=sharedHolidays_(date.slice(0,4)).dates;
- var result=model.applyAttendance(month.records,memberId,date,status,recalculate,participation,locked);month.days=model.data.days;month.entries=model.data.entries;month.audit=(month.audit||[]).concat(model.data.audit.map(function(item){return Object.assign(item,{actor:actor||'일정 변경 재집계'})})).slice(-1000);sharedQueueReports_(month,memberId,date);return result;
+ var result=model.applyAttendance(month.records,memberId,date,status,recalculate,participation,locked);sharedSaveAttendanceModel_(month,model,actor);sharedQueueReports_(month,memberId,date);return result;
+}
+function sharedSaveAttendanceModel_(month,model,actor){
+ month.days=model.data.days;month.entries=model.data.entries;month.audit=(month.audit||[]).concat(model.data.audit.map(function(item){return Object.assign(item,{actor:actor||'일정 변경 재집계'})})).slice(-1000);
 }
 function sharedReconcile_(config,month,limit){
  var processed=0;while(month.reconcile.length&&processed<limit){var key=month.reconcile[0],date=key.slice(0,10),memberId=key.slice(11);if(month.records[key]==='출석')sharedApply_(config,month,memberId,date,'출석',true);month.reconcile.shift();processed++}return processed;
@@ -201,7 +214,7 @@ function sharedRpc(request,origin,channel){
   var staff=staffId&&config?(config.staff||[]).find(function(person){return person.id===staffId&&person.active!==false}):null;
   if(staffId&&!staff)admin=false;
   var actor=staff?staff.name:admin?'공용 관리자':'참여자 출석';
-  if(path==='/api/team/status')return sharedReply_({service:'ch-team-api',configured:true,initialized:manifest.initialized,authenticated:admin,staffId:staff?staff.id:'',googleConfigured:sharedReportsConfigured_(),participationPeriods:true,local:false,backend:'google'});
+  if(path==='/api/team/status')return sharedReply_({service:'ch-team-api',configured:true,initialized:manifest.initialized,authenticated:admin,staffId:staff?staff.id:'',googleConfigured:sharedReportsConfigured_(),participationPeriods:true,programCheckin:true,local:false,backend:'google'});
   if(path==='/api/integration-status')return sharedReply_({service:'ch-performance-api',configured:sharedReportsConfigured_(),authenticated:admin});
   if(path.startsWith('/api/team/photos/')||path==='/api/team/photo')return sharedPhoto_(book,request,admin);
   if(path==='/api/team/state'){
@@ -211,7 +224,7 @@ function sharedRpc(request,origin,channel){
    delete visibleConfig.configAudit;
    if(!admin){visibleConfig.members=visibleConfig.members.filter(function(m){return m.active!==false}).map(function(m){return {id:m.id,name:m.name,communityId:m.communityId,active:true,history:[{from:'1900-01-01',communityId:m.communityId}],photo:m.photo||null}});visibleConfig.staff=[];visibleConfig.caseAssignments=[]}
    var publicRecords={},publicDays={};Object.keys(month.records).forEach(function(key){if(admin||key.startsWith(today+':')){publicRecords[key]=month.records[key];publicDays[key]=month.days[key]}});
-   return sharedReply_({initialized:true,revision:manifest.revision,config:visibleConfig,records:publicRecords,days:publicDays,entries:admin?month.entries:[],audit:admin?(config.configAudit||[]).concat(month.audit||[]):[]});
+   return sharedReply_({initialized:true,revision:manifest.revision,config:visibleConfig,records:publicRecords,days:publicDays,programCheckins:monthKey===today.slice(0,7)?sharedProgramCheckins_(month,today):undefined,entries:admin?month.entries:[],audit:admin?(config.configAudit||[]).concat(month.audit||[]):[]});
   }
   if(path==='/api/team/checkin'||path==='/api/team/attendance'){
    var publicCheckin=path==='/api/team/checkin';if(!publicCheckin&&!admin)return sharedReply_({error:'관리자 인증이 필요합니다.'},401);
@@ -222,7 +235,9 @@ function sharedRpc(request,origin,channel){
    mark('monthReadMs');
    var currentStatus=month.records[date+':'+member.id]||'';
    var day=month.days[date+':'+member.id],currentPeriod=currentStatus==='출석'?day?.participation||'both':'';
-   var requestedPeriod=input.participation;
+   var exact=publicCheckin&&input.scheduleId!==undefined;
+   if(exact&&(typeof input.scheduleId!=='string'||!input.scheduleId||typeof input.programId!=='string'||!input.programId||date!==input.date))return sharedReply_({error:'오늘 프로그램을 다시 확인해 주세요.'},422);
+   var requestedPeriod=exact?undefined:input.participation;
    if(requestedPeriod!==undefined&&(!['am','pm','both'].includes(requestedPeriod)||status!=='출석'))return sharedReply_({error:'오전 또는 오후 참여를 선택해 주세요.'},400);
    if(publicCheckin&&currentStatus==='결석'){
     return sharedReply_({error:'오늘 못 와요로 기록되어 있어요. 출석하려면 직원에게 알려 주세요.',
@@ -231,17 +246,32 @@ function sharedRpc(request,origin,channel){
    var period=requestedPeriod;
    if(publicCheckin&&period&&currentPeriod&&currentPeriod!==period)period='both';
    if(publicCheckin&&day?.participationLocked&&period&&period!==currentPeriod)return sharedReply_({error:'직원이 참여 시간을 지정했어요. 시간을 바꾸려면 직원에게 알려 주세요.',code:'PERIOD_LOCKED',currentStatus:currentStatus,participation:currentPeriod,date:date,revision:manifest.revision},409);
-   var signature=JSON.stringify(requestedPeriod?[member.id,date,status,requestedPeriod]:[member.id,date,status]),prior=month.requests[input.requestId];if(prior){
-    if(prior.signature!==signature)return sharedReply_({error:'요청 ID 충돌'},409);
+   var signature=JSON.stringify(exact?[member.id,date,status,input.scheduleId,input.programId]:requestedPeriod?[member.id,date,status,requestedPeriod]:[member.id,date,status]),prior=month.requests[input.requestId];if(prior&&prior.signature!==signature)return sharedReply_({error:'요청 ID 충돌'},409);
+   if(prior&&!exact){
     if(currentStatus!==status)return sharedReply_({error:'저장 후 최신 출결이 변경되었습니다. 현재 출결을 확인해 주세요.',currentStatus:currentStatus,participation:currentPeriod,date:date,revision:manifest.revision},409);
     return sharedReply_(Object.assign({},prior.result,{participation:currentPeriod,replayed:true,revision:manifest.revision,reportReceipt:sharedReportReceipt_(month,member.id,date)}));
    }
    if(!publicCheckin&&input.expectedStatus!==undefined&&input.expectedStatus!==currentStatus&&status!==currentStatus)return sharedReply_({error:'다른 직원이 출결을 먼저 바꿨습니다. 현재 출결을 확인한 뒤 다시 선택해 주세요.',currentStatus:currentStatus,participation:currentPeriod,date:date,revision:manifest.revision},409);
    if(!publicCheckin&&input.expectedParticipation!==undefined&&input.expectedParticipation!==currentPeriod&&period!==currentPeriod)return sharedReply_({error:'다른 직원이 참여 시간을 먼저 바꿨습니다. 현재 기록을 확인해 주세요.',currentStatus:currentStatus,participation:currentPeriod,date:date,revision:manifest.revision},409);
-   if(currentStatus===status&&(!period||period===currentPeriod&&(publicCheckin||day?.participationLocked)))return sharedReply_({ok:true,date:date,status:status,participation:currentPeriod,replayed:true,revision:manifest.revision,reportReceipt:sharedReportReceipt_(month,member.id,date)});
+   if(!exact&&currentStatus===status&&(!period||period===currentPeriod&&(publicCheckin||day?.participationLocked)))return sharedReply_({ok:true,date:date,status:status,participation:currentPeriod,replayed:true,revision:manifest.revision,reportReceipt:sharedReportReceipt_(month,member.id,date)});
    var holidays=sharedHolidays_(date.slice(0,4)),model=sharedModel_(config,month);model.holidays=holidays.dates;if(publicCheckin&&model.holidayName(date))return sharedReply_({error:model.holidayName(date)+' · 오늘은 쉬는 날입니다.'},422);
    if(publicCheckin&&['am','pm'].includes(requestedPeriod)&&!model.personalSchedules(member.id,date).some(function(schedule){return ManagementStore.inParticipationPeriod(schedule,requestedPeriod)}))return sharedReply_({error:'선택한 시간의 프로그램이 변경되었습니다. 일정을 다시 확인해 주세요.'},422);
-   var result=Object.assign({ok:true,participation:status==='출석'?period||currentPeriod||'both':''},sharedApply_(config,month,member.id,date,status,!!period,publicCheckin?'참여자 출석':actor,model,period,!publicCheckin));month.requests[input.requestId]={signature,result};var requestKeys=Object.keys(month.requests);while(requestKeys.length>2000)delete month.requests[requestKeys.shift()];
+   var result;
+   if(exact){
+    var item=model.personalSchedules(member.id,date).find(function(schedule){return schedule.id===input.scheduleId&&schedule.program.id===input.programId});
+    if(!item)return sharedReply_({error:'오늘 배정된 프로그램을 다시 확인해 주세요.'},422);
+    var programKey=ManagementStore.programAttendanceKey(item.id,item.program.id);
+    if(day?.participationLocked&&!ManagementStore.inParticipationPeriod(item,currentPeriod))return sharedReply_({error:'직원이 정한 참여 시간입니다. 직원에게 알려 주세요.',code:'PERIOD_LOCKED',currentStatus:currentStatus,participation:currentPeriod,date:date,revision:manifest.revision},409);
+    var matches=month.entries.filter(function(entry){return entry.date===date&&entry.memberId===member.id&&entry.scheduleId===item.id&&entry.programId===item.program.id});
+    if(currentStatus==='출석'&&matches.some(function(entry){return entry.checked}))return sharedReply_({ok:true,date:date,status:status,participation:currentPeriod,scheduleKey:programKey,replayed:true,revision:manifest.revision});
+    if(prior||matches.some(function(entry){return entry.participationOverride==='exclude'}))return sharedReply_({error:'직원이 정정한 프로그램 출석입니다. 직원에게 알려 주세요.',code:'PROGRAM_LOCKED',currentStatus:currentStatus,participation:currentPeriod,date:date,revision:manifest.revision},409);
+    result=Object.assign({ok:true},model.checkInProgram(month.records,member,date,item));
+    sharedSaveAttendanceModel_(month,model,actor);
+    sharedQueueReports_(month,member.id,date);
+   }else{
+    result=Object.assign({ok:true,participation:status==='출석'?period||currentPeriod||'both':''},sharedApply_(config,month,member.id,date,status,!!period,publicCheckin?'참여자 출석':actor,model,period,!publicCheckin));
+   }
+   month.requests[input.requestId]={signature,result};var requestKeys=Object.keys(month.requests);while(requestKeys.length>2000)delete month.requests[requestKeys.shift()];
    mark('prepareMs');
    sharedSaveMonth_(book,manifest,key,month);sharedCommit_(book,manifest); // Commit attendance before attempting report projection.
    mark('attendanceWriteMs');

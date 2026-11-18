@@ -103,3 +103,50 @@ body:not(.participant-mode) dialog:has(.program-registration-form){width:780px;m
 .kiosk-day-schedule .participation-day>section{background:#fff}
 .kiosk-day-schedule .participation-day h3{color:#2c507d}
 @media(max-width:520px){.kiosk-day-schedule{padding:14px;margin-bottom:22px}}
+.kiosk-photo-entry{display:flex;flex-wrap:wrap;align-items:stretch;gap:10px;margin:18px 0 10px}
+.kiosk-photo-entry button{min-height:52px;font-size:17px}
+.kiosk-photo-entry #startPhotoCheckin{min-height:64px;padding:12px 22px;font-size:21px;background:#28684d;color:#fff}
+.kiosk-flow details.participant-search{margin:8px 0 22px}
+.kiosk-flow details.participant-search summary{cursor:pointer;padding:8px 0;font-size:16px;color:#2d507d;font-weight:700}
+.kiosk-flow details.participant-search label{margin-top:8px}
+.kiosk-program-section>h2{font-size:25px;margin:0 0 16px}
+.kiosk-program-period{margin:0 0 16px}
+.kiosk-program-period h3{margin:0 0 8px;color:#2e4d73;font-size:18px}
+.kiosk-program-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,225px),1fr));gap:9px}
+.kiosk-program-card{display:flex;align-items:center;gap:10px;min-height:76px;padding:10px 12px;text-align:left;border:2px solid #dae3ee;border-radius:12px;overflow-wrap:anywhere}
+.kiosk-program-card .communityicon{display:grid;place-items:center;flex:0 0 40px;width:40px;height:40px}
+.kiosk-program-card .communityicon svg{width:26px;height:26px}
+.kiosk-program-card strong{display:block;font-size:17px}
+.kiosk-program-card small{display:block;margin-top:4px;font-size:14px;color:#475b72}
+.kiosk-program-card[aria-pressed=true]{background:#e9f0fb;border-color:#345591}
+.kiosk-program-summary{padding:16px;margin:18px 0;border:1px solid #bacce2;border-radius:14px;background:#f8faff;scroll-margin-top:14px}
+.kiosk-program-summary-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.kiosk-program-summary-head h3,.kiosk-program-summary-head p{margin:0 0 5px}
+.kiosk-program-summary-head p{font-size:18px;color:#245d45}
+.kiosk-program-summary-head button{min-height:48px;font-size:16px}
+.kiosk-program-status{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}
+.kiosk-program-status>div{padding:10px 12px;background:#eaf1fa;border:1px solid #c2d1e6;border-radius:10px;min-width:0}
+.kiosk-program-status>div+div{background:#fff6e5;border-color:#ead5ad}
+.kiosk-program-status h4,.kiosk-program-status p{margin:0;font-size:15px;overflow-wrap:anywhere}
+.kiosk-program-status p{margin-top:5px;line-height:1.65}
+body.participant-mode dialog:has(.kiosk-photo-grid){width:min(720px,calc(100% - 24px));max-width:720px;max-height:90dvh}
+.kiosk-photo-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:14px 0}
+.kiosk-photo-option{display:grid;gap:5px;min-width:0}
+.kiosk-photo-option .personcard{width:100%;min-width:0;min-height:0;padding:8px;gap:5px;overflow-wrap:anywhere}
+.kiosk-photo-option .personcard b{font-size:16px}
+.kiosk-photo-option .personcard .portrait,.kiosk-photo-option .personcard .avatar{width:100%;height:auto;aspect-ratio:1}
+.kiosk-photo-option>.secondary,.kiosk-photo-pages button,.kiosk-confirm-actions button{min-height:44px}
+.kiosk-photo-pages,.kiosk-confirm-actions{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
+.kiosk-confirm-program span{display:block;margin-top:3px}
+.kiosk-confirm-actions #confirmProgramCheckin{flex-basis:100%;min-height:60px;background:#28684d;font-size:21px}
+@media(max-width:620px){.kiosk-photo-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.kiosk-program-status{grid-template-columns:1fr}}
+@media(max-width:390px){.kiosk-photo-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.kiosk-period-controls{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 12px}
+.kiosk-period-controls button{min-height:49px;min-width:95px;font-size:18px;font-weight:700}
+.kiosk-period-controls [aria-pressed=true]{color:#fff;background:#345591;border-color:#345591}
+.kiosk-person-agenda{text-align:left;margin:14px 0 4px}
+.kiosk-person-agenda summary{cursor:pointer;font-weight:700;padding:8px}
+.kiosk-person-agenda ul{list-style:none;padding:6px 8px;margin:0}
+.kiosk-person-agenda li+li{margin-top:7px}
+.kiosk-person-agenda li span{display:block;font-size:14px}
+.kiosk-program-card .kiosk-program-count{display:block;margin-top:6px;color:#245d45;font-weight:700;font-size:15px}

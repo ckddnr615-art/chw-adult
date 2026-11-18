@@ -24,9 +24,9 @@
       for(const assignment of this.data.caseAssignments.filter(a=>a.memberId===memberId&&(!a.to||a.to>=from))){if(assignment.from>=from)assignment.active=false;else assignment.to=ManagementStore.addDays(from,-1)}
       if(staffId)this.data.caseAssignments.push({id:uid(),memberId,staffId,from,to:'',active:true});
     }
-    eligibleMembers(schedule,d){
+    eligibleMembers(schedule,d,daySchedules=this.schedulesOn(d)){
       const rawEligible=(item,member)=>item.audienceMode==='individual'?this.data.enrollments.some(e=>e.active!==false&&e.memberId===member.id&&e.scheduleId===item.id&&e.from<=d&&(!e.to||e.to>=d)):this.memberGroupAt(member,d)===item.communityId;
-      const dated=this.schedulesOn(d).filter(s=>this.find('schedules',s.id)?.date===d&&s.audienceMode==='individual');
+      const dated=daySchedules.filter(s=>this.find('schedules',s.id)?.date===d&&s.audienceMode==='individual');
       return this.list('members').filter(member=>rawEligible(schedule,member)&&(this.find('schedules',schedule.id)?.date===d||!dated.some(s=>s.start<schedule.end&&schedule.start<s.end&&rawEligible(s,member))));
     }
     assignParticipants(scheduleId,memberIds,from,mode){
@@ -213,6 +213,26 @@
       if(period==='pm')return (schedule.end||schedule.start||'')>'13:00';
       return true;
     }
+    static programAttendanceKey(scheduleId,programId){return JSON.stringify([scheduleId,programId])}
+    checkInProgram(records,member,d,schedule){
+      const key=d+':'+member.id,previous=records[key]||'';
+      const programKey=ManagementStore.programAttendanceKey(schedule.id,schedule.program.id);
+      records[key]='출석';
+      this.captureDays({[key]:'출석'});
+      const day=this.data.days[key];
+      if(previous!=='출석'&&!day.programScheduleKeys)day.programScheduleKeys=[];
+      if(day.programScheduleKeys&&!day.programScheduleKeys.includes(programKey))day.programScheduleKeys.push(programKey);
+      const slot=ManagementStore.scheduleSlot(schedule),part=slot==='morning'?'am':slot==='afternoon'?'pm':'both';
+      const current=previous==='출석'?(day.participation||'both'):'';
+      if(!day.participationLocked)day.participation=current&&current!==part?'both':part;
+      if(!day.reportMode)day.reportMode=this.data.entries.some(e=>e.date===d&&e.memberId===member.id)?'area':'program';
+      const entry=this.setParticipation(member.id,schedule.id,d,true,{matchCurrent:true});
+      if(day.reportMode==='program')entry.reportMode='program';
+      entry.source='kiosk_program';
+      entry.attendanceLinked=true;
+      if(previous!=='출석')this.audit('출결 변경','days',key,previous,'출석');
+      return {memberId:member.id,date:d,status:'출석',participation:day.participation||'both',scheduleKey:programKey};
+    }
     applyAttendance(records,memberId,d,nextStatus,recalculate=false,participation,locked){
       if(!['출석','결석',''].includes(nextStatus))throw Error('출석·결석·미입력 중 선택해 주세요.');
       const member=this.find('members',memberId);if(!member)throw Error('참여자를 찾을 수 없습니다.');
@@ -227,13 +247,15 @@
       }else if(day&&nextStatus!=='출석'){
         delete day.participation;
         delete day.participationLocked;
+        if(day.programScheduleKeys)day.programScheduleKeys=[];
       }
       let generated=0,cancelled=0;
       if(nextStatus==='출석'){
         if(member.active===false&&previous!=='출석')throw Error('삭제한 참여자는 복구 후 출석을 입력해 주세요.');
         if(previous==='출석'&&!recalculate)return {memberId,date:d,status:nextStatus,generated,cancelled};
         const period=day?.participation||'both';
-        const schedules=this.personalSchedules(memberId,d).filter(s=>ManagementStore.inParticipationPeriod(s,period));
+        const schedules=this.personalSchedules(memberId,d).filter(s=>ManagementStore.inParticipationPeriod(s,period)&&
+          (!day?.programScheduleKeys||day.programScheduleKeys.includes(ManagementStore.programAttendanceKey(s.id,s.program.id))));
         const entries=this.data.entries.filter(e=>e.memberId===memberId&&e.date===d);
         for(const entry of entries){
           if(!ManagementStore.inParticipationPeriod(entry,period)){

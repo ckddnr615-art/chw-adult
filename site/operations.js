@@ -6,6 +6,7 @@ let configRetryable=false;
 const monthRevisions=new Map(),attendanceRequests=new Map();
 const attendanceRecordRevisions=new Map();
 let latestAttendanceRevision=0;
+let kioskProgramCheckins={},kioskProgramSnapshotRevision=0;
 const configSaveWaiters=[];
 const CONFIG_TYPES=['communities','members','areas','programs','schedules','staff','caseAssignments','enrollments','scheduleOverrides','closures','banners'];
 const originalPersist=persist,previousOperationsRender=render,previousOperationsBind=bindManagement,previousPhotoEditor=openEditor;
@@ -25,6 +26,7 @@ async function loadTeamMonth(month=date.slice(0,7),full=false){
   await ensureHolidayYear(month.slice(0,4)).catch(()=>{});
   const since=full?0:monthRevisions.get(month)||0,response=await fetch(`/api/team/state?month=${month}&since=${since}`,{credentials:'same-origin'});if(!response.ok)throw Error('공유 자료를 읽지 못했습니다.');const data=await response.json();if(!data.initialized)return false;
   if(data.revision<Math.max(latestAttendanceRevision,...monthRevisions.values()))return true;
+  if(data.programCheckins){kioskProgramCheckins=data.programCheckins;kioskProgramSnapshotRevision=data.revision}
   if(!data.unchanged){applyingTeam=true;try{if(data.config&&!configPending&&!configSaving){for(const type of CONFIG_TYPES)management.data[type]=data.config[type]||[];management.data.timetableVersion=1;configBaseline=currentConfig();management.upgradeTimetable()}Object.assign(records,data.records);Object.assign(management.data.days,data.days);for(const entry of data.entries||[]){const index=management.data.entries.findIndex(e=>e.id===entry.id);if(index<0)management.data.entries.push(entry);else management.data.entries[index]=entry}if(adminSession||team.authenticated)management.data.audit=(data.audit||[]).slice().sort((a,b)=>a.time.localeCompare(b.time));originalPersist();refreshCollections();lastScheduleJSON=JSON.stringify([management.data.schedules,management.data.scheduleOverrides,management.data.closures,management.data.programs.map(p=>[p.id,p.enabledHistory||[]])])}finally{applyingTeam=false}}
   if(!configPending&&!configSaving)monthRevisions.set(month,data.revision);team.active=true;team.initialized=true;return true;
 }
@@ -77,13 +79,14 @@ function applyAttendanceReceipt(memberId,day,value,revision,participation){
     dayRecord.participation=participation;
   }
 }
-async function commitAttendance(memberId,d,value,publicCheckin=false,participation){if(!team.active)throw Error('Google 공동 저장 연결 후 출석할 수 있습니다.');
+async function commitAttendance(memberId,d,value,publicCheckin=false,participation,schedule){if(!team.active)throw Error('Google 공동 저장 연결 후 출석할 수 있습니다.');
+  if(schedule&&!team.programCheckin)throw Error('프로그램 출석을 사용하려면 서버를 먼저 업데이트해 주세요.');
   if(participation&&!team.participationPeriods)throw Error('오전·오후 출석을 사용하려면 관리자에게 서버 업데이트를 요청해 주세요.');
   if(!publicCheckin)await ensureHolidayYear(d.slice(0,4));
   if(team.active){
-    const key=memberId+':'+d+':'+value+':'+(participation||''),requestId=attendanceRequests.get(key)||crypto.randomUUID();attendanceRequests.set(key,requestId);
+    const key=memberId+':'+d+':'+value+':'+(schedule?ManagementStore.programAttendanceKey(schedule.id,schedule.program.id):participation||''),requestId=attendanceRequests.get(key)||crypto.randomUUID();attendanceRequests.set(key,requestId);
     const expectedStatus=records[d+':'+memberId]||'';
-    let result;for(let n=0;n<3;n++){try{result=await teamRequest(publicCheckin?'checkin':'attendance',{memberId,date:d,status:value,requestId,expectedStatus,participation,expectedParticipation:attendancePeriod(memberId,d),deferReports:publicCheckin});break}catch(error){
+    let result;for(let n=0;n<3;n++){try{result=await teamRequest(publicCheckin?'checkin':'attendance',{memberId,date:d,status:value,requestId,expectedStatus,participation,scheduleId:schedule?.id,programId:schedule?.program.id,expectedParticipation:attendancePeriod(memberId,d),deferReports:publicCheckin});break}catch(error){
       if(error.currentStatus!==undefined){
         attendanceRequests.delete(key);
         applyAttendanceReceipt(memberId,error.date||d,error.currentStatus,error.revision,error.participation);
@@ -95,6 +98,10 @@ async function commitAttendance(memberId,d,value,publicCheckin=false,participati
     }}
     attendanceRequests.delete(key);
     applyAttendanceReceipt(memberId,result.date||d,result.status??value,result.revision,result.participation);
+    if(result.scheduleKey&&result.revision>=kioskProgramSnapshotRevision){
+      const checked=kioskProgramCheckins[result.scheduleKey]||=[];
+      if(!checked.includes(memberId))checked.push(memberId);
+    }
     if(publicCheckin)return result;
     try{await loadTeamMonth(d.slice(0,7))}catch{team.error='출결 저장 완료 · 최신 자료를 다시 확인해 주세요.'}
     render();return result;
@@ -206,73 +213,9 @@ function saveAttendanceOption(id,day,value){
   const participation=['am','pm','both'].includes(value)?value:undefined;
   return commitAttendance(id,day,participation?'출석':value,false,participation);
 }
-function bindPublicCheckins(){
-  for(const button of document.querySelectorAll('[data-checkin]')){
-    if(!team.active){
-      button.disabled=true;
-      button.title='Google 공동 저장을 연결한 뒤 출석할 수 있습니다.';
-      continue;
-    }
-    button.onclick=()=>openPublicCheckin(button.dataset.checkin);
-  }
-}
-function openPublicCheckin(id){
-      const member=management.find('members',id);
-      if(!member||!team.active)return;
-      const current=status(member);
-      const period=attendancePeriod(member.id,date);
-      const schedules=management.personalSchedules(member.id,date);
-      const choices=[['am','오전 출석하기'],['pm','오후 출석하기']].filter(([part])=>
-        period!==part&&period!=='both'&&schedules.some(s=>ManagementStore.inParticipationPeriod(s,part)));
-      if(!schedules.length&&!period)choices.push(['both','출석하기']);
-      if(schedules.length&&choices.length===2&&!period)choices.push(['both','종일 출석하기']);
-      modal(photoMarkup(member,'confirm-portrait')+'<h2>'+esc(member.name)+' 님이 맞나요?</h2>'+
-        personalDaySummary(member)+(current==='결석'?'<p>'+absenceMessage+'</p>':
-        choices.length?'<div class="participation-actions">'+choices.map(([value,label])=>
-          '<button class="primary" data-checkin-period="'+value+'">'+label+'</button>').join('')+'</div>':
-          '<p>오늘 참여할 시간의 출석이 기록됐어요.</p>'));
-      void hydratePhotos();
-      $('#closeDialog').textContent='닫기';
-      $('#dialogcontent').querySelectorAll('[data-checkin-period]').forEach(button=>button.onclick=async()=>{
-        if(status(member)==='결석'){showAbsenceNotice();return}
-        const dialog=$('#dialog');
-        $('#dialogcontent').innerHTML='<span class="saving-spinner" aria-hidden="true"></span><h2>출석을 기록하고 있어요</h2><p>'+
-          esc(member.name)+' 님, 잠시만 기다려 주세요.</p>';
-        const spinner=dialog.querySelector('.saving-spinner');
-        const isCurrent=()=>dialog.open&&dialog.contains(spinner);
-        $('#closeDialog').textContent='창 닫기';
-        try{
-          await commitAttendance(member.id,date,'출석',true,button.dataset.checkinPeriod);
-          refreshKioskAfterDialog();
-          if(!isCurrent())return;
-          if(status(member)==='결석'){showAbsenceNotice();return}
-          $('#dialogcontent').innerHTML='<div role="status" class="kiosk-checkin-success"><span class="successmark" aria-hidden="true">✓</span><h2>'+
-            esc(member.name)+' 님,<br>출석이 완료됐어요.</h2></div>';
-          $('#closeDialog').textContent='닫기';
-          say(member.name+' 님 출석했어요.');
-          const success=dialog.querySelector('.kiosk-checkin-success');
-          const timer=setTimeout(()=>{
-            if(dialog.open&&dialog.contains(success))dialog.close();
-          },4000);
-          dialog.addEventListener('close',()=>clearTimeout(timer),{once:true});
-        }catch(error){
-          if(error.currentStatus!==undefined)refreshKioskAfterDialog();
-          if(!isCurrent())return;
-          if(error.code==='ABSENCE_LOCKED'){showAbsenceNotice();return}
-          if(error.code==='PERIOD_LOCKED'){
-            $('#dialogcontent').innerHTML='<h2>참여 시간 확인</h2><p>'+esc(error.message)+'</p>';
-            $('#closeDialog').textContent='알겠어요';
-            say(error.message);
-            return;
-          }
-          $('#dialogcontent').innerHTML='<h2>기록을 확인하지 못했어요</h2><p>'+esc(error.message)+
-            '</p><p>창을 닫고 이름을 다시 눌러 주세요. 같은 요청으로 중복 없이 확인합니다.</p>';
-          $('#closeDialog').textContent='이름으로 돌아가기';
-        }
-      });
-}
 bindManagement=function(page){
-  previousOperationsBind(page);bindClosureManagement();if(page==='appearance')bindBannerSettings();if(page==='kiosk')bindPublicCheckins();
+  previousOperationsBind(page);bindClosureManagement();if(page==='appearance')bindBannerSettings();
+  if(page==='kiosk')document.querySelectorAll('[data-checkin]').forEach(button=>{button.disabled=true});
   if(page==='operations'){
     const controls=document.querySelectorAll('[data-kiosk-move]');
     controls.forEach(button=>button.onclick=async()=>{

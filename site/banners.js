@@ -1,10 +1,10 @@
 /* Shared, escaped banner content; original image files never enter the catalog. */
 let bannerSettingsKind='kiosk';
-const BANNER_DEFAULTS={kiosk:{id:'kiosk',eyebrow:'발달장애인의 주체적인 삶, 함께 이루는 행복한 세상',line1:'반가워요.',line2:'오늘도 함께해요.',description:'내가 다니는 곳을 고르고 출석해 주세요.',buttonLabel:'',photo:null,imageAlt:'출석 화면 배너',imageFit:'cover'},dashboard:{id:'dashboard',eyebrow:'CHUNGHYUN · TOGETHER EVERY DAY',line1:'작은 참여가 모여',line2:'더 나은 일상으로.',description:'오늘의 출석과 활동을 확인하고,\n한 사람의 변화를 함께 살펴보세요.',buttonLabel:'오늘 출결 확인 ↗',photo:null,imageAlt:'팀 운영 대시보드 배너',imageFit:'cover'}};
+const BANNER_DEFAULTS={kiosk:{id:'kiosk',eyebrow:'발달장애인의 주체적인 삶, 함께 이루는 행복한 세상',line1:'반가워요.',line2:'오늘도 함께해요.',description:'내 사진을 찾아 출석해 주세요.',buttonLabel:'',photo:null,imageAlt:'출석 화면 배너',imageFit:'cover'},dashboard:{id:'dashboard',eyebrow:'CHUNGHYUN · TOGETHER EVERY DAY',line1:'작은 참여가 모여',line2:'더 나은 일상으로.',description:'오늘의 출석과 활동을 확인하고,\n한 사람의 변화를 함께 살펴보세요.',buttonLabel:'오늘 출결 확인 ↗',photo:null,imageAlt:'팀 운영 대시보드 배너',imageFit:'cover'}};
 const BANNER_FONT_DEFAULTS={kiosk:{eyebrow:18,title:44,description:20,button:16},dashboard:{eyebrow:10,title:42,description:14,button:12}};
 const BANNER_FONT_SPECS=[['eyebrow','위쪽 문구',10,28],['title','제목',24,72],['description','안내 문구',12,36],['button','버튼 문구',12,28]];
 function bannerFontSizes(kind,values={}){return Object.fromEntries(BANNER_FONT_SPECS.map(([key,label,min,max])=>[key,Number.isFinite(values[key])?Math.max(min,Math.min(max,values[key])):BANNER_FONT_DEFAULTS[kind][key]]))}
-function bannerConfig(kind){const b={...BANNER_DEFAULTS[kind],...(management.data.banners||[]).find(b=>b.id===kind)};b.fontSizes=bannerFontSizes(kind,b.fontSizes);return b}
+function bannerConfig(kind){const b={...BANNER_DEFAULTS[kind],...(management.data.banners||[]).find(b=>b.id===kind)};if(kind==='kiosk'&&b.description==='내가 다니는 곳을 고르고 출석해 주세요.')b.description=BANNER_DEFAULTS.kiosk.description;b.fontSizes=bannerFontSizes(kind,b.fontSizes);return b}
 function bannerPhotoSlots(b){
  const photos=b.id==='kiosk'&&Array.isArray(b.photos)?b.photos.filter(Boolean):[b.photo];
  return Array.from({length:b.id==='kiosk'?2:1},(_,i)=>{
