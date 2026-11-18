@@ -77,7 +77,7 @@ function sharedHolidays_(year){
 function sharedQueueReports_(month,memberId,date){
  var sources=month.entries.filter(function(e){return e.memberId===memberId&&e.date===date});
  PerformanceProjection.aggregate(sources).forEach(function(report){
-  var id='area-'+sharedHash_(report.reportKey),old=month.reports[id],signature=JSON.stringify([report.name,report.date,report.area,report.staff,report.communityId,report.community,report.checked]);
+  var id=(report.reportMode==='program'?'program-':'area-')+sharedHash_(report.reportKey),old=month.reports[id],signature=JSON.stringify([report.name,report.date,PerformanceProjection.label(report),report.staff,report.communityId,report.community,report.checked]);
   if(!report.checked&&!old)return;if(old&&old.signature===signature)return;
   month.reports[id]={signature,sync:'pending',error:'',entry:Object.assign({},report,{id,version:old?old.entry.version+1:1})};
  });
@@ -92,7 +92,7 @@ function sharedFlushMonth_(month,limit,deadline){
   count++;
   try{writeProjectedPerformance_(report.entry,props);report.sync='synced';report.error=''}catch(error){report.sync='error';report.error=error.message}
  }
- month.entries.forEach(function(entry){var report=month.reports['area-'+sharedHash_(PerformanceProjection.key(entry))];entry.sync=report?.sync||'pending';entry.error=report?.error||''});return count;
+ month.entries.forEach(function(entry){var report=month.reports[(entry.reportMode==='program'?'program-':'area-')+sharedHash_(PerformanceProjection.key(entry))];entry.sync=report?.sync||'pending';entry.error=report?.error||''});return count;
 }
 function sharedCanDeferReports_(){
  var cache=CacheService.getScriptCache(),key='report-maintenance-installed',cached=cache.get(key);
@@ -107,10 +107,10 @@ function sharedReportReceipt_(month,memberId,date){
  var active=reports.filter(function(r){return r.entry.checked}),map={};try{map=JSON.parse(sharedProps_().getProperty('SHEET_TAB_MAP')||'{}')}catch(error){}
  return {areaCount:active.length,synced:active.filter(function(r){return r.sync==='synced'}).length,pending:reports.filter(function(r){return r.sync==='pending'}).length,failed:reports.filter(function(r){return r.sync==='error'}).length,mappingMissing:reports.some(function(r){return !map[r.entry.communityId]}),noSchedule:month.records[date+':'+memberId]==='출석'&&!month.entries.some(function(e){return e.memberId===memberId&&e.date===date})};
 }
-function sharedApply_(config,month,memberId,date,status,recalculate,actor,preparedModel){
+function sharedApply_(config,month,memberId,date,status,recalculate,actor,preparedModel,participation,locked){
  var model=preparedModel||sharedModel_(config,month);
  if(!preparedModel)model.holidays=sharedHolidays_(date.slice(0,4)).dates;
- var result=model.applyAttendance(month.records,memberId,date,status,recalculate);month.days=model.data.days;month.entries=model.data.entries;month.audit=(month.audit||[]).concat(model.data.audit.map(function(item){return Object.assign(item,{actor:actor||'일정 변경 재집계'})})).slice(-1000);sharedQueueReports_(month,memberId,date);return result;
+ var result=model.applyAttendance(month.records,memberId,date,status,recalculate,participation,locked);month.days=model.data.days;month.entries=model.data.entries;month.audit=(month.audit||[]).concat(model.data.audit.map(function(item){return Object.assign(item,{actor:actor||'일정 변경 재집계'})})).slice(-1000);sharedQueueReports_(month,memberId,date);return result;
 }
 function sharedReconcile_(config,month,limit){
  var processed=0;while(month.reconcile.length&&processed<limit){var key=month.reconcile[0],date=key.slice(0,10),memberId=key.slice(11);if(month.records[key]==='출석')sharedApply_(config,month,memberId,date,'출석',true);month.reconcile.shift();processed++}return processed;
@@ -158,8 +158,10 @@ function sharedReadPhotoBlob_(fileId){
  return response.getBlob();
 }
 function sharedPhoto_(book,request,admin){
- var table=sharedSheet_(book,'__CH_APP_PHOTOS'),rows=table.getLastRow()?table.getRange(1,1,table.getLastRow(),5).getValues():[],match=request.path.match(/^\/api\/team\/photos\/([-a-zA-Z0-9]+)\/([a-f0-9]+)$/);
+ var table=request.method==='GET'?book.getSheetByName('__CH_APP_PHOTOS'):sharedSheet_(book,'__CH_APP_PHOTOS');
+ var rowCount=table?table.getLastRow():0,rows=rowCount?table.getRange(1,1,rowCount,5).getValues():[];
  if(request.method==='GET'){
+  var match=request.path.match(/^\/api\/team\/photos\/([-a-zA-Z0-9]+)\/([a-f0-9]+)$/);
   var row=match&&rows.find(function(r){return r[0]===match[1]&&r[1]===match[2]});if(!row)return sharedReply_({error:'사진 없음'},404);
   return {status:200,mime:row[3],binary:Utilities.base64Encode(sharedReadPhotoBlob_(row[2]).getBytes())};
  }
@@ -181,13 +183,25 @@ function sharedRpc(request,origin,channel){
  if(path==='/api/integration-logout'){if(request.token)CacheService.getScriptCache().remove('admin:'+sharedHash_(request.token));return sharedReply_({ok:true})}
  var session=sharedSession_(request.token),staffId=session.indexOf('staff:')===0?session.slice(6):'',admin=session==='1'||!!staffId;
  if(path==='/api/holidays'){try{return sharedReply_(sharedHolidays_(params.year))}catch(error){return sharedReply_({ok:false,error:error.message},503)}}
- var lock=LockService.getScriptLock();if(!lock.tryLock(25000))return sharedReply_({error:'다른 기기의 변경을 저장 중입니다. 잠시 후 다시 확인해 주세요.',busy:true},409);
+ // Photo reads use the versioned index and never write to the workbook.
+ if(request.method==='GET'&&path.startsWith('/api/team/photos/')){
+  try{return sharedPhoto_(sharedBook_(),request,false)}catch(error){return sharedReply_({error:error.message||'사진을 불러오지 못했습니다.'},500)}
+ }
+ var checkin=path==='/api/team/checkin',started=Date.now(),phase=started,timing={};
+ function mark(name){if(checkin){var now=Date.now();timing[name]=now-phase;phase=now}}
+ var lock=LockService.getScriptLock();
+ if(!lock.tryLock(25000)){
+  if(checkin)console.log('checkin_timing '+JSON.stringify({lockMs:Date.now()-started,result:'busy'}));
+  return sharedReply_({error:'다른 기기의 변경을 저장 중입니다. 잠시 후 다시 확인해 주세요.',busy:true},409);
+ }
+ mark('lockMs');
  try{
   var book=sharedBook_(),manifest=sharedManifest_(book),config=sharedConfig_(book,manifest),today=sharedToday_(),input=request.input||{};
+  mark('configReadMs');
   var staff=staffId&&config?(config.staff||[]).find(function(person){return person.id===staffId&&person.active!==false}):null;
   if(staffId&&!staff)admin=false;
   var actor=staff?staff.name:admin?'공용 관리자':'참여자 출석';
-  if(path==='/api/team/status')return sharedReply_({service:'ch-team-api',configured:true,initialized:manifest.initialized,authenticated:admin,staffId:staff?staff.id:'',googleConfigured:sharedReportsConfigured_(),local:false,backend:'google'});
+  if(path==='/api/team/status')return sharedReply_({service:'ch-team-api',configured:true,initialized:manifest.initialized,authenticated:admin,staffId:staff?staff.id:'',googleConfigured:sharedReportsConfigured_(),participationPeriods:true,local:false,backend:'google'});
   if(path==='/api/integration-status')return sharedReply_({service:'ch-performance-api',configured:sharedReportsConfigured_(),authenticated:admin});
   if(path.startsWith('/api/team/photos/')||path==='/api/team/photo')return sharedPhoto_(book,request,admin);
   if(path==='/api/team/state'){
@@ -205,25 +219,37 @@ function sharedRpc(request,origin,channel){
    var date=publicCheckin?today:input.date,status=publicCheckin?'출석':input.status,member=config.members.find(function(m){return m.id===input.memberId&&m.active!==false});
    if(!member||!/^\d{4}-\d{2}-\d{2}$/.test(date)||date>today||!['출석','결석',''].includes(status)||!/^[-a-zA-Z0-9]{8,100}$/.test(input.requestId||''))return sharedReply_({error:'출결 요청 오류'},400);
    var key=date.slice(0,7),month=sharedMonth_(book,manifest,key);
+   mark('monthReadMs');
    var currentStatus=month.records[date+':'+member.id]||'';
+   var day=month.days[date+':'+member.id],currentPeriod=currentStatus==='출석'?day?.participation||'both':'';
+   var requestedPeriod=input.participation;
+   if(requestedPeriod!==undefined&&(!['am','pm','both'].includes(requestedPeriod)||status!=='출석'))return sharedReply_({error:'오전 또는 오후 참여를 선택해 주세요.'},400);
    if(publicCheckin&&currentStatus==='결석'){
     return sharedReply_({error:'오늘 못 와요로 기록되어 있어요. 출석하려면 직원에게 알려 주세요.',
-     code:'ABSENCE_LOCKED',currentStatus:currentStatus,date:date,revision:manifest.revision},409);
+     code:'ABSENCE_LOCKED',currentStatus:currentStatus,participation:currentPeriod,date:date,revision:manifest.revision},409);
    }
-   var signature=JSON.stringify([member.id,date,status]),prior=month.requests[input.requestId];if(prior){
+   var period=requestedPeriod;
+   if(publicCheckin&&period&&currentPeriod&&currentPeriod!==period)period='both';
+   if(publicCheckin&&day?.participationLocked&&period&&period!==currentPeriod)return sharedReply_({error:'직원이 참여 시간을 지정했어요. 시간을 바꾸려면 직원에게 알려 주세요.',code:'PERIOD_LOCKED',currentStatus:currentStatus,participation:currentPeriod,date:date,revision:manifest.revision},409);
+   var signature=JSON.stringify(requestedPeriod?[member.id,date,status,requestedPeriod]:[member.id,date,status]),prior=month.requests[input.requestId];if(prior){
     if(prior.signature!==signature)return sharedReply_({error:'요청 ID 충돌'},409);
-    if(currentStatus!==status)return sharedReply_({error:'저장 후 최신 출결이 변경되었습니다. 현재 출결을 확인해 주세요.',currentStatus:currentStatus,date:date,revision:manifest.revision},409);
-    return sharedReply_(Object.assign({},prior.result,{replayed:true,revision:manifest.revision,reportReceipt:sharedReportReceipt_(month,member.id,date)}));
+    if(currentStatus!==status)return sharedReply_({error:'저장 후 최신 출결이 변경되었습니다. 현재 출결을 확인해 주세요.',currentStatus:currentStatus,participation:currentPeriod,date:date,revision:manifest.revision},409);
+    return sharedReply_(Object.assign({},prior.result,{participation:currentPeriod,replayed:true,revision:manifest.revision,reportReceipt:sharedReportReceipt_(month,member.id,date)}));
    }
-   if(!publicCheckin&&input.expectedStatus!==undefined&&input.expectedStatus!==currentStatus&&status!==currentStatus)return sharedReply_({error:'다른 직원이 출결을 먼저 바꿨습니다. 현재 출결을 확인한 뒤 다시 선택해 주세요.',currentStatus:currentStatus,date:date,revision:manifest.revision},409);
-   if(currentStatus===status)return sharedReply_({ok:true,date:date,status:status,replayed:true,revision:manifest.revision,reportReceipt:sharedReportReceipt_(month,member.id,date)});
+   if(!publicCheckin&&input.expectedStatus!==undefined&&input.expectedStatus!==currentStatus&&status!==currentStatus)return sharedReply_({error:'다른 직원이 출결을 먼저 바꿨습니다. 현재 출결을 확인한 뒤 다시 선택해 주세요.',currentStatus:currentStatus,participation:currentPeriod,date:date,revision:manifest.revision},409);
+   if(!publicCheckin&&input.expectedParticipation!==undefined&&input.expectedParticipation!==currentPeriod&&period!==currentPeriod)return sharedReply_({error:'다른 직원이 참여 시간을 먼저 바꿨습니다. 현재 기록을 확인해 주세요.',currentStatus:currentStatus,participation:currentPeriod,date:date,revision:manifest.revision},409);
+   if(currentStatus===status&&(!period||period===currentPeriod&&(publicCheckin||day?.participationLocked)))return sharedReply_({ok:true,date:date,status:status,participation:currentPeriod,replayed:true,revision:manifest.revision,reportReceipt:sharedReportReceipt_(month,member.id,date)});
    var holidays=sharedHolidays_(date.slice(0,4)),model=sharedModel_(config,month);model.holidays=holidays.dates;if(publicCheckin&&model.holidayName(date))return sharedReply_({error:model.holidayName(date)+' · 오늘은 쉬는 날입니다.'},422);
-   var result=Object.assign({ok:true},sharedApply_(config,month,member.id,date,status,false,publicCheckin?'참여자 출석':actor,model));month.requests[input.requestId]={signature,result};var requestKeys=Object.keys(month.requests);while(requestKeys.length>2000)delete month.requests[requestKeys.shift()];
+   if(publicCheckin&&['am','pm'].includes(requestedPeriod)&&!model.personalSchedules(member.id,date).some(function(schedule){return ManagementStore.inParticipationPeriod(schedule,requestedPeriod)}))return sharedReply_({error:'선택한 시간의 프로그램이 변경되었습니다. 일정을 다시 확인해 주세요.'},422);
+   var result=Object.assign({ok:true,participation:status==='출석'?period||currentPeriod||'both':''},sharedApply_(config,month,member.id,date,status,!!period,publicCheckin?'참여자 출석':actor,model,period,!publicCheckin));month.requests[input.requestId]={signature,result};var requestKeys=Object.keys(month.requests);while(requestKeys.length>2000)delete month.requests[requestKeys.shift()];
+   mark('prepareMs');
    sharedSaveMonth_(book,manifest,key,month);sharedCommit_(book,manifest); // Commit attendance before attempting report projection.
+   mark('attendanceWriteMs');
    // The committed month already contains the report queue. The installed maintenance trigger drains it.
    if(!(publicCheckin&&input.deferReports===true&&sharedCanDeferReports_())&&sharedFlushMonth_(month,4)){
     sharedSaveMonth_(book,manifest,key,month);sharedCommit_(book,manifest);
    }
+   mark('reportStepMs');
    return sharedReply_(Object.assign({},result,{revision:manifest.revision,reportReceipt:sharedReportReceipt_(month,member.id,date)}));
   }
   if(!admin)return sharedReply_({error:'관리자 인증이 필요합니다.'},401);
@@ -283,7 +309,13 @@ function sharedRpc(request,origin,channel){
    if(anyChanged)sharedCommit_(book,manifest);return sharedReply_({ok:true,remaining});
   }
   return sharedReply_({error:'지원하지 않는 API 경로'},404);
- }catch(error){return sharedReply_({error:error.message||'Google 저장 오류'},error.conflict?409:500)}finally{lock.releaseLock()}
+ }catch(error){return sharedReply_({error:error.message||'Google 저장 오류'},error.conflict?409:500)}finally{
+  lock.releaseLock();
+  if(checkin){
+   timing.totalMs=Date.now()-started;
+   console.log('checkin_timing '+JSON.stringify(timing));
+  }
+ }
 }
 /* Run these private helpers from the Apps Script editor, not from the browser. */
 function configurePerformanceSheets_(expectedSpreadsheetId){
@@ -299,7 +331,7 @@ function configurePerformanceSheets_(expectedSpreadsheetId){
    var tab=map[community.id]||String(community.name||'').trim()+' 실적 기록';
    if(!community.id||typeof tab!=='string'||!tab.trim()||tab.length>100||/[\[\]:*?\/\\]/.test(tab)||tab.indexOf('__CH_')===0)throw Error('소속 또는 실적 탭 이름을 확인해 주세요.');
    if(used[tab])throw Error('여러 소속이 같은 실적 탭을 사용하도록 설정되어 있습니다. 소속별 탭 이름을 확인해 주세요.');used[tab]=true;
-   var sheet=book.getSheetByName(tab);if(sheet&&sheet.getLastRow()>0){var h=sheet.getRange(1,1,1,14).getDisplayValues()[0],staffColumn=h[11]==='담당자'?12:9;if(h[0]!=='이름'||h[6]!=='사업날짜'||h[7]!=='영역명'||h[staffColumn-1]!=='담당자'||staffColumn===12&&h[13]!=='출석고유키(자동)')throw Error(tab+' 탭의 기존 열 배치가 다릅니다. 자료를 덮어쓰지 않고 중단합니다.');}
+   var sheet=book.getSheetByName(tab);if(sheet&&sheet.getLastRow()>0){var h=sheet.getRange(1,1,1,14).getDisplayValues()[0],staffColumn=h[11]==='담당자'?12:9;if(h[0]!=='이름'||h[6]!=='사업날짜'||!['영역명','프로그램명','프로그램명 (기존 영역명 포함)'].includes(h[7])||h[staffColumn-1]!=='담당자'||staffColumn===12&&h[13]!=='출석고유키(자동)')throw Error(tab+' 탭의 기존 열 배치가 다릅니다. 자료를 덮어쓰지 않고 중단합니다.');}
    return {id:community.id,name:community.name,tab:tab};
   });
   // Validate every destination before creating any tab or changing the mapping.

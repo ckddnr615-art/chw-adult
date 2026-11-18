@@ -3,7 +3,12 @@ const assert=require('node:assert/strict');
 const Store=require('../site/domain.js');
 function fixture(){return new Store(Store.seed(['건강','스마트'],[{id:'member-1',name:'참여자1',group:'건강'},{id:'member-2',name:'참여자2',group:'스마트'}],[['10:00','11:00','건강활동','건강','강의실','직원1'],['10:30','11:30','디지털활동','스마트','정보실','직원2']],{}))}
 function replacement(store,extra={}){return {kind:'replace',programId:'program-1',displayName:'외부 체험활동',start:'10:00',end:'11:30',location:'지역사회',facilitatorIds:[store.list('staff')[0].id],reason:'외부활동',...extra}}
-test('기본 시간대는 세 구간으로 제공한다',()=>{assert.deepEqual(Store.timeSlots().map(s=>[s.start,s.end]),[['10:00','11:30'],['13:00','14:30'],['14:30','15:40']])});
+test('오전, 오후, 종일을 구분하며 기존 오후 일정의 상세 시간을 유지한다',()=>{
+ assert.deepEqual(Store.timeSlots().map(s=>s.name),['오전','오후','종일']);
+ assert.equal(Store.scheduleSlot({start:'14:30',end:'15:40',slotId:'afternoon2'}),'afternoon');
+ assert.equal(Store.scheduleSlot({start:'10:00',end:'13:00'}),'morning');
+ assert.equal(Store.scheduleSlot({start:'10:00',end:'15:40'}),'all-day');
+});
 
 test('소속 없는 영역·프로그램·개별 일정 등록 후 다른 소속 이용인도 배정한다',()=>{
  const store=fixture(),area=store.save('areas','',{name:'공통 영역'},'2026-10-26');
@@ -65,3 +70,13 @@ test('70명 이상과 직원 8명의 사례관리를 프로그램과 독립적�
   assert.equal(store.data.caseAssignments.length,76);assert.equal(staff.length,8);assert.equal(store.eligibleMembers(scheduled,'2026-10-26').length,3);
 });
 test('기존 사용자 지정 시간은 마이그레이션으로 덮어쓰지 않는다',()=>{const store=fixture(),data=structuredClone(store.data);delete data.timetableVersion;data.schedules.push({id:'user-custom',programId:'program-1',date:'2026-10-26',weekdays:[],start:'09:20',end:'16:00',location:'외부',active:true});const migrated=new Store(data);assert.equal(migrated.find('schedules','user-custom').start,'09:20');assert.equal(migrated.find('schedules','user-custom').end,'16:00')});
+
+test('종일 프로그램은 첫 수요일에 오전 운영만 남긴다',()=>{
+ const store=fixture(),day='2026-11-04';
+ const full=store.save('schedules','',{programId:'program-1',weekdays:[3],start:'10:00',end:'15:40',location:'활동실',communityId:'community-1'},day);
+ assert.equal(Store.scheduleSlot(store.schedulesOn('2026-11-11').find(s=>s.id===full.id)),'all-day');
+ const restricted=store.schedulesOn(day).find(s=>s.id===full.id);
+ assert.equal(restricted.end,'13:00');
+ assert.equal(Store.scheduleSlot(restricted),'morning');
+ assert.equal(Store.inParticipationPeriod(restricted,'pm'),false);
+});

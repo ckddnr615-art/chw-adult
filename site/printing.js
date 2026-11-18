@@ -40,7 +40,7 @@ function printCurrentDocument(button){
  copy.querySelectorAll('.filters,.weektoolbar,.staff-schedule-filter,.timetable-help,.add-slot,.notice,.schedule-warning button,[data-reset-override]').forEach(el=>el.remove());
  copy.querySelectorAll('button').forEach(el=>{const replacement=document.createElement(el.matches('.timetable-card')?'div':'span');replacement.className=el.className;replacement.innerHTML=el.innerHTML;el.replaceWith(replacement)});
  copy.querySelectorAll('[id]').forEach(el=>el.removeAttribute('id'));
- const title=source.querySelector('.personal-caption h2')?.textContent|| (source.querySelector('.monthly-grid')?'월별 출석부':document.querySelector('#timetableStaff')?'직원별 주간 시간표':'주간 시간표');
+ const title=source.querySelector('.personal-caption h2')?.textContent|| (source.querySelector('.monthly-grid')?'사례관리 담당자별 월별 출석부':document.querySelector('#timetableStaff')?'직원별 주간 시간표':'주간 시간표');
  document.querySelector('#documentPrintFrame')?.remove();
  const frame=document.createElement('iframe');frame.id='documentPrintFrame';frame.title='인쇄용 문서';frame.style.cssText='position:fixed;left:-20000px;top:0;width:1120px;height:800px;border:0';
  frame.onload=async()=>{try{await frame.contentDocument.fonts.ready;if(staffPage)fitStaffPrintPage(frame.contentDocument);frame.contentWindow.focus();frame.contentWindow.print()}catch{toast('브라우저 인쇄 기능을 열지 못했습니다. 다시 시도해 주세요.')}};

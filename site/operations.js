@@ -16,7 +16,7 @@ async function teamRequest(path,input){
   let result;
   try{result=await response.json()}catch{throw Error('서버 응답을 확인하지 못했습니다.')}
   if(!response.ok||result.ok===false)throw Object.assign(Error(result.error||'서버 저장 실패'),{
-    status:response.status,conflict:result.conflict||response.status===409,currentStatus:result.currentStatus,
+    status:response.status,conflict:result.conflict||response.status===409,currentStatus:result.currentStatus,participation:result.participation,
     code:result.code,date:result.date,revision:result.revision,retryable:result.busy===true||response.status===503
   });
   return result;
@@ -64,7 +64,7 @@ persist=function(){
   lastScheduleJSON=scheduleJSON;
   const result=originalPersist();if(result&&!applyingTeam&&team.active&&team.authenticated){configPending=true;clearTimeout(configTimer);configTimer=setTimeout(saveTeamConfig,180)}return result;
 };
-function applyAttendanceReceipt(memberId,day,value,revision){
+function applyAttendanceReceipt(memberId,day,value,revision,participation){
   const key=day+':'+memberId;
   if(revision&&revision<Math.max(attendanceRecordRevisions.get(key)||0,...monthRevisions.values()))return;
   if(revision){
@@ -72,16 +72,21 @@ function applyAttendanceReceipt(memberId,day,value,revision){
     attendanceRecordRevisions.set(key,revision);
   }
   records[key]=value;
+  if(participation!==undefined){
+    const dayRecord=management.data.days[key]||(management.data.days[key]={});
+    dayRecord.participation=participation;
+  }
 }
-async function commitAttendance(memberId,d,value,publicCheckin=false){if(!team.active)throw Error('Google 공동 저장 연결 후 출석할 수 있습니다.');
+async function commitAttendance(memberId,d,value,publicCheckin=false,participation){if(!team.active)throw Error('Google 공동 저장 연결 후 출석할 수 있습니다.');
+  if(participation&&!team.participationPeriods)throw Error('오전·오후 출석을 사용하려면 관리자에게 서버 업데이트를 요청해 주세요.');
   if(!publicCheckin)await ensureHolidayYear(d.slice(0,4));
   if(team.active){
-    const key=memberId+':'+d+':'+value,requestId=attendanceRequests.get(key)||crypto.randomUUID();attendanceRequests.set(key,requestId);
+    const key=memberId+':'+d+':'+value+':'+(participation||''),requestId=attendanceRequests.get(key)||crypto.randomUUID();attendanceRequests.set(key,requestId);
     const expectedStatus=records[d+':'+memberId]||'';
-    let result;for(let n=0;n<3;n++){try{result=await teamRequest(publicCheckin?'checkin':'attendance',{memberId,date:d,status:value,requestId,expectedStatus,deferReports:publicCheckin});break}catch(error){
+    let result;for(let n=0;n<3;n++){try{result=await teamRequest(publicCheckin?'checkin':'attendance',{memberId,date:d,status:value,requestId,expectedStatus,participation,expectedParticipation:attendancePeriod(memberId,d),deferReports:publicCheckin});break}catch(error){
       if(error.currentStatus!==undefined){
         attendanceRequests.delete(key);
-        applyAttendanceReceipt(memberId,error.date||d,error.currentStatus,error.revision);
+        applyAttendanceReceipt(memberId,error.date||d,error.currentStatus,error.revision,error.participation);
         if(!publicCheckin)render();
         throw error;
       }
@@ -89,7 +94,7 @@ async function commitAttendance(memberId,d,value,publicCheckin=false){if(!team.a
       await new Promise(resolve=>setTimeout(resolve,250*(n+1)+Math.random()*250));
     }}
     attendanceRequests.delete(key);
-    applyAttendanceReceipt(memberId,result.date||d,result.status??value,result.revision);
+    applyAttendanceReceipt(memberId,result.date||d,result.status??value,result.revision,result.participation);
     if(publicCheckin)return result;
     try{await loadTeamMonth(d.slice(0,7))}catch{team.error='출결 저장 완료 · 최신 자료를 다시 확인해 주세요.'}
     render();return result;
@@ -124,7 +129,7 @@ function openConfigConflict(){
 }
 function showTeamStatus(){
   document.querySelector('#teamStatus')?.remove();if(!$('#main'))return;
-  const text=team.loading?'Google 공동 저장 확인 중…':team.error?'저장 확인 필요 · '+team.error:team.saving?'공유 서버에 저장 중…':team.active?`Google 공동 저장 연결됨 · 영역 실적 ${team.googleConfigured?'자동 전송 설정됨':'소속별 탭 매핑 대기'}`:team.configured?'공유 저장소가 비어 있습니다. 관리자 로그인 후 현재 자료로 시작해 주세요.':'브라우저 저장 모드 · 다른 기기 공유는 배포 서버 연결 후 가능합니다.';
+  const text=team.loading?'Google 공동 저장 확인 중…':team.error?'저장 확인 필요 · '+team.error:team.saving?'공유 서버에 저장 중…':team.active?`Google 공동 저장 연결됨 · 프로그램 실적 ${team.googleConfigured?'자동 전송 설정됨':'소속별 탭 매핑 대기'}`:team.configured?'공유 저장소가 비어 있습니다. 관리자 로그인 후 현재 자료로 시작해 주세요.':'브라우저 저장 모드 · 다른 기기 공유는 배포 서버 연결 후 가능합니다.';
   const node=document.createElement('section');node.id='teamStatus';node.className='team-status'+(team.error?' error':'');node.setAttribute('role','status');node.innerHTML=`<span>${esc(text)}</span>${team.configured&&!team.initialized&&adminSession?'<button class="secondary" id="initializeTeam">현재 자료로 공유 저장소 시작</button>':''}${team.error?'<button class="secondary" id="reloadTeam">서버 자료 다시 불러오기</button>':''}`;$('#main').prepend(node);
   if(configConflict&&team.error){
     node.insertAdjacentHTML('beforeend','<button class="secondary" id="compareTeamConfig">저장 내용 비교</button>');
@@ -144,7 +149,7 @@ function showTeamStatus(){
 function downloadTeamBackup(){const blob=new Blob([JSON.stringify({records,management:management.data},null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='충현_운영자료_백업_'+date+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}
 function automaticLedger(d,memberId=''){
   const rawEntries=management.data.entries.filter(e=>e.date===d&&(!memberId||e.memberId===memberId)),entries=PerformanceProjection.aggregate(rawEntries).map(e=>({...e,sync:e.allSourceIds.length&&e.allSourceIds.every(id=>rawEntries.find(s=>s.id===id)?.sync==='synced')?'synced':'pending'}));
-  return `<details class="ledger-panel"><summary>출석에 연결된 영역 실적 · ${entries.filter(e=>e.checked).length}건 / 취소 ${entries.filter(e=>!e.checked).length}건</summary><p class="notice">출석은 참여자별·날짜별·영역별 1건의 실적을 만듭니다. 같은 영역은 가장 빠른 시간의 진행 직원을 표시합니다. 결석·미입력 변경 시 그날 연결된 실적을 모두 취소합니다. 결석은 실적 행을 만들지 않습니다.</p><div class="tablewrap"><table class="admin-table"><thead><tr><th>참여자</th><th>소속</th><th>영역</th><th>담당자</th><th>실적 상태</th><th>Google</th></tr></thead><tbody>${entries.map(e=>`<tr><td>${esc(e.name)}</td><td>${esc(e.community)}</td><td>${esc(e.area)}</td><td>${esc(e.staff)}</td><td>${e.checked?'출석 연동':'취소'}</td><td>${e.sync==='synced'?'반영 확인':team.googleConfigured?'전송 대기':'미연결 · 대기'}</td></tr>`).join('')||'<tr><td colspan="6">연결된 실적이 없습니다.</td></tr>'}</tbody></table></div><button class="secondary" id="exportLinkedEntries">이 날짜 실적 CSV</button></details>`;
+  return `<details class="ledger-panel"><summary>출석에 연결된 실적 · ${entries.filter(e=>e.checked).length}건 / 취소 ${entries.filter(e=>!e.checked).length}건</summary><p class="notice">새 실적은 참여자별·날짜별·프로그램별로 집계합니다. 기존 실적은 기록 당시 기준으로 표시합니다. 결석·미입력 변경 시 그날 연결된 실적을 모두 취소합니다. 결석은 실적 행을 만들지 않습니다.</p><div class="tablewrap"><table class="admin-table"><thead><tr><th>참여자</th><th>소속</th><th>실적명</th><th>담당자</th><th>실적 상태</th><th>Google</th></tr></thead><tbody>${entries.map(e=>`<tr><td>${esc(e.name)}</td><td>${esc(e.community)}</td><td>${esc(PerformanceProjection.label(e))}</td><td>${esc(e.staff)}</td><td>${e.checked?'출석 연동':'취소'}</td><td>${e.sync==='synced'?'반영 확인':team.googleConfigured?'전송 대기':'미연결 · 대기'}</td></tr>`).join('')||'<tr><td colspan="6">연결된 실적이 없습니다.</td></tr>'}</tbody></table></div><button class="secondary" id="exportLinkedEntries">이 날짜 실적 CSV</button></details>`;
 }
 function patchPhotos(){
   for(const button of document.querySelectorAll('[data-checkin]')){const member=management.find('members',button.dataset.checkin);if(member?.photo)button.querySelector('.avatar')?.replaceWith(document.createRange().createContextualFragment(photoMarkup(member)))}
@@ -153,7 +158,7 @@ function patchPhotos(){
 }
 render=function(){if(location.hash==='#performance')history.replaceState(null,'','#attendance');previousOperationsRender();showTeamStatus();patchPhotos();holidayNotice();if(location.hash.split('/')[0]==='#attendance'&&$('#main .panel')){$('#main .panel').insertAdjacentHTML('beforeend',automaticLedger(selectedDate));$('#main .panel').insertAdjacentHTML('beforebegin',programAttendancePanel());bindProgramAttendance();if($('#exportLinkedEntries'))$('#exportLinkedEntries').onclick=()=>exportEntries(management.data.entries.filter(e=>e.date===selectedDate),'출석연동_실적_'+selectedDate+'.csv')}};
 openEditor=function(type,id=''){if(type==='closures')return openClosureEditor(id);if(type==='members')return openMemberPhotoEditor(id);return previousPhotoEditor(type,id)};
-editDay=function(key){const d=key.slice(0,10),id=key.slice(11),member=management.find('members',id);if(d>date){toast('미래 출결을 입력할 수 없습니다.');return}modal(`<h2>${esc(member.name)} · ${d}</h2><form id="linkedDayForm" class="entityform"><label>출결 상태<select name="status">${['출석','결석',''].map(s=>`<option value="${s}" ${(records[key]||'')===s?'selected':''}>${s||'미입력 · 연결 실적 취소'}</option>`).join('')}</select></label><p class="formhint">출석 이외 상태로 바꾸면 그날 연결된 실적을 모두 취소합니다. 결석은 월별 출석부에 O로만 표시합니다.</p><p id="linkedDayError" role="alert"></p><button class="primary" type="submit">출결과 연결 실적 저장</button></form>`);$('#linkedDayForm').onsubmit=async e=>{e.preventDefault();e.submitter.disabled=true;try{const result=await commitAttendance(id,d,new FormData(e.target).get('status'));$('#dialog').close();toast(staffAttendanceMessage(result))}catch(error){$('#linkedDayError').textContent=error.message;e.submitter.disabled=false}}};
+editDay=function(key){const d=key.slice(0,10),id=key.slice(11),member=management.find('members',id);if(d>date){toast('미래 출결을 입력할 수 없습니다.');return}modal(`<h2>${esc(member.name)} · ${d}</h2><form id="linkedDayForm" class="entityform"><label>출결 상태<select name="status">${attendanceOptionMarkup(id,d)}</select></label><p class="formhint">출석 이외 상태로 바꾸면 그날 연결된 실적을 모두 취소합니다. 결석은 월별 출석부에 O로만 표시합니다.</p><p id="linkedDayError" role="alert"></p><button class="primary" type="submit">출결과 연결 실적 저장</button></form>`);$('#linkedDayForm').onsubmit=async e=>{e.preventDefault();e.submitter.disabled=true;try{const result=await saveAttendanceOption(id,d,new FormData(e.target).get('status'));$('#dialog').close();toast(staffAttendanceMessage(result))}catch(error){$('#linkedDayError').textContent=error.message;e.submitter.disabled=false}}};
 function staffAttendanceMessage(result){
   const receipt=result?.reportReceipt;
   if(!receipt)return '출결을 저장했습니다.';
@@ -184,6 +189,23 @@ function showAbsenceNotice(){
   $('#closeDialog').textContent='알겠어요';
   say(absenceMessage);
 }
+function attendancePeriod(id,day){
+  const key=day+':'+id;
+  return records[key]==='출석'?management.data.days[key]?.participation||'both':'';
+}
+function attendanceOption(id,day){
+  const current=records[day+':'+id]||'';
+  return current==='출석'?attendancePeriod(id,day):current;
+}
+const ATTENDANCE_OPTIONS=[['','미입력'],['am','오전만 참여'],['pm','오후만 참여'],['both','하루 참여'],['결석','오늘 못 와요 (결석)']];
+function attendanceOptionMarkup(id,day){
+  const current=attendanceOption(id,day);
+  return ATTENDANCE_OPTIONS.map(([value,label])=>'<option value="'+value+'" '+(value===current?'selected':'')+'>'+label+'</option>').join('');
+}
+function saveAttendanceOption(id,day,value){
+  const participation=['am','pm','both'].includes(value)?value:undefined;
+  return commitAttendance(id,day,participation?'출석':value,false,participation);
+}
 function bindPublicCheckins(){
   for(const button of document.querySelectorAll('[data-checkin]')){
     if(!team.active){
@@ -191,20 +213,27 @@ function bindPublicCheckins(){
       button.title='Google 공동 저장을 연결한 뒤 출석할 수 있습니다.';
       continue;
     }
-    button.onclick=()=>{
-      const member=management.find('members',button.dataset.checkin);
+    button.onclick=()=>openPublicCheckin(button.dataset.checkin);
+  }
+}
+function openPublicCheckin(id){
+      const member=management.find('members',id);
+      if(!member||!team.active)return;
       const current=status(member);
-      if(current==='결석'){showAbsenceNotice();return}
-      if(current==='출석'){
-        modal('<h2>'+esc(member.name)+' 님,<br>오늘 출석했어요.</h2><p>다시 누르지 않아도 괜찮아요.</p>');
-        return;
-      }
+      const period=attendancePeriod(member.id,date);
+      const schedules=management.personalSchedules(member.id,date);
+      const choices=[['am','오전 출석하기'],['pm','오후 출석하기']].filter(([part])=>
+        period!==part&&period!=='both'&&schedules.some(s=>ManagementStore.inParticipationPeriod(s,part)));
+      if(!schedules.length&&!period)choices.push(['both','출석하기']);
+      if(schedules.length&&choices.length===2&&!period)choices.push(['both','종일 출석하기']);
       modal(photoMarkup(member,'confirm-portrait')+'<h2>'+esc(member.name)+' 님이 맞나요?</h2>'+
-        '<p>이름이 맞으면 출석 버튼을 눌러 주세요.</p>'+personalDaySummary(member)+
-        '<button id="autoConfirmCheckin" class="primary">네, 출석할게요</button>');
+        personalDaySummary(member)+(current==='결석'?'<p>'+absenceMessage+'</p>':
+        choices.length?'<div class="participation-actions">'+choices.map(([value,label])=>
+          '<button class="primary" data-checkin-period="'+value+'">'+label+'</button>').join('')+'</div>':
+          '<p>오늘 참여할 시간의 출석이 기록됐어요.</p>'));
       void hydratePhotos();
-      $('#closeDialog').textContent='아니요, 다시 고를게요';
-      $('#autoConfirmCheckin').onclick=async()=>{
+      $('#closeDialog').textContent='닫기';
+      $('#dialogcontent').querySelectorAll('[data-checkin-period]').forEach(button=>button.onclick=async()=>{
         if(status(member)==='결석'){showAbsenceNotice();return}
         const dialog=$('#dialog');
         $('#dialogcontent').innerHTML='<span class="saving-spinner" aria-hidden="true"></span><h2>출석을 기록하고 있어요</h2><p>'+
@@ -213,7 +242,7 @@ function bindPublicCheckins(){
         const isCurrent=()=>dialog.open&&dialog.contains(spinner);
         $('#closeDialog').textContent='창 닫기';
         try{
-          await commitAttendance(member.id,date,'출석',true);
+          await commitAttendance(member.id,date,'출석',true,button.dataset.checkinPeriod);
           refreshKioskAfterDialog();
           if(!isCurrent())return;
           if(status(member)==='결석'){showAbsenceNotice();return}
@@ -230,13 +259,17 @@ function bindPublicCheckins(){
           if(error.currentStatus!==undefined)refreshKioskAfterDialog();
           if(!isCurrent())return;
           if(error.code==='ABSENCE_LOCKED'){showAbsenceNotice();return}
+          if(error.code==='PERIOD_LOCKED'){
+            $('#dialogcontent').innerHTML='<h2>참여 시간 확인</h2><p>'+esc(error.message)+'</p>';
+            $('#closeDialog').textContent='알겠어요';
+            say(error.message);
+            return;
+          }
           $('#dialogcontent').innerHTML='<h2>기록을 확인하지 못했어요</h2><p>'+esc(error.message)+
             '</p><p>창을 닫고 이름을 다시 눌러 주세요. 같은 요청으로 중복 없이 확인합니다.</p>';
           $('#closeDialog').textContent='이름으로 돌아가기';
         }
-      };
-    };
-  }
+      });
 }
 bindManagement=function(page){
   previousOperationsBind(page);bindClosureManagement();if(page==='appearance')bindBannerSettings();if(page==='kiosk')bindPublicCheckins();
@@ -288,16 +321,29 @@ bindManagement=function(page){
     };
   }
   if(page==='dashboard')showStaffDesk();
-  if(page==='attendance'){document.querySelectorAll('[data-status]').forEach(select=>select.onchange=async()=>{const previous=status(management.find('members',select.dataset.status),selectedDate);select.disabled=true;try{const result=await commitAttendance(select.dataset.status,selectedDate,select.value);toast(staffAttendanceMessage(result))}catch(error){select.value=previous;select.disabled=false;toast(error.message)}})}
+  if(page==='attendance'){document.querySelectorAll('[data-status]').forEach(select=>select.onchange=async()=>{const previous=attendanceOption(select.dataset.status,selectedDate);select.disabled=true;try{const result=await saveAttendanceOption(select.dataset.status,selectedDate,select.value);toast(staffAttendanceMessage(result))}catch(error){select.value=previous;select.disabled=false;toast(error.message)}})}
   if(page==='workspace'){if($('#backupTeamData'))$('#backupTeamData').onclick=downloadTeamBackup;if($('#refreshTeamData'))$('#refreshTeamData').onclick=async()=>{await loadTeamMonth(date.slice(0,7),true);render()}}
-  if(page==='reports'&&$('#reportMonth')){const original=$('#reportMonth').onchange;$('#reportMonth').onchange=async e=>{try{await ensureHolidayYear(e.target.value.slice(0,4));if(team.active){await loadTeamMonth(e.target.value);reportMonth=e.target.value;render()}else original(e)}catch(error){toast(error.message)}}}
+  if(page==='reports'&&$('#reportMonth')){
+    const picker=$('#reportMonth'),original=picker.onchange;
+    picker.onchange=async()=>{
+      const month=picker.value;
+      if(!month)return;
+      picker.disabled=true;
+      try{
+        await ensureHolidayYear(month.slice(0,4));
+        if(team.active)await loadTeamMonth(month);
+        original({target:picker});
+      }catch(error){picker.value=reportMonth;toast(error.message)}
+      finally{picker.disabled=false}
+    };
+  }
 };
-managementPages.workspace=function(){return heading('Google 공동 저장','공동 자료와 출결은 Google Sheets에, 사진 축소본은 Drive에 보관합니다.')+`<section class="panel"><h2>${team.active?'Google 공동 저장 연결됨':'Google 연결 설정 필요'}</h2><p>영역 실적: <b>${team.googleConfigured?'소속별 탭 자동 반영 설정됨':'SHEET_TAB_MAP 설정 대기'}</b></p><p class="notice">사진은 Drive 비공개 폴더에 저장하며, 같은 참여자·날짜·영역은 한 번만 실적으로 입력합니다.</p><div class="actions"><button class="secondary" id="backupTeamData">운영 자료 백업</button><button class="secondary" id="refreshTeamData">공동 자료 새로 확인</button></div><p><a class="textbutton" href="연결설명서.html" target="_blank" rel="noopener">Google 연결 설명서 ↗</a></p></section>`};
+managementPages.workspace=function(){return heading('Google 공동 저장','공동 자료와 출결은 Google Sheets에, 사진 축소본은 Drive에 보관합니다.')+`<section class="panel"><h2>${team.active?'Google 공동 저장 연결됨':'Google 연결 설정 필요'}</h2><p>프로그램 실적: <b>${team.googleConfigured?'소속별 탭 자동 반영 설정됨':'SHEET_TAB_MAP 설정 대기'}</b></p><p class="notice">사진은 Drive 비공개 폴더에 저장하며, 같은 참여자·날짜·프로그램은 한 건으로 기록합니다.</p><div class="actions"><button class="secondary" id="backupTeamData">운영 자료 백업</button><button class="secondary" id="refreshTeamData">공동 자료 새로 확인</button></div><p><a class="textbutton" href="연결설명서.html" target="_blank" rel="noopener">Google 연결 설명서 ↗</a></p></section>`};
 managementPages.settings=function(){return heading('환경 설정','운영 환경과 자료 보관 상태를 확인합니다. 배너 문구·사진·글자 크기는 화면 설정에서 변경합니다.')+`<section class="panel"><h2>운영 환경</h2><p>업무 시간대: Asia/Seoul</p><p>Google 공동 저장: ${team.active?'연결됨':'연결 확인 필요'}</p><p>Google Sheets: ${team.googleConfigured?'서버 전송 설정됨':'미연결'}</p><a href="#appearance" class="primary">화면 설정 열기 ↗</a></section>`};
 managementPages.performance=attendance;
 const initialHash=location.hash;
 async function bootTeam(){try{const response=await fetch('/api/team/status',{credentials:'same-origin'});if(!response.ok)throw Error();const status=await response.json();if(status.service!=='ch-team-api')throw Error();Object.assign(team,status);team.active=false;if(team.initialized){adminSession=!!team.authenticated;await loadTeamMonth(date.slice(0,7),true);if(adminSession&&initialHash!=='#login')history.replaceState(null,'',initialHash||'#kiosk')}}catch{team.configured=true;team.error='Google 공동 저장 연결 설정을 확인해 주세요. google-config.js의 웹앱 주소와 Apps Script 배포를 확인하세요.';adminSession=false}finally{team.loading=false;render()}}
 const teamBoot=bootTeam();
 render();
-setInterval(async()=>{if(!team.active||document.hidden||configPending||configSaving||location.hash==='#appearance')return;try{await loadTeamMonth(location.hash==='#reports'?reportMonth:date.slice(0,7));if(!$('#dialog').open&&!document.activeElement?.closest('#summaryAttendanceForm'))render()}catch{team.error='공유 자료 확인 실패 · 기기의 현재 자료는 유지됩니다.';showTeamStatus()}},60000);
+setInterval(async()=>{if(!team.active||document.hidden||configPending||configSaving||location.hash==='#appearance')return;try{await loadTeamMonth(location.hash==='#reports'?reportMonth:date.slice(0,7));if(!$('#dialog').open&&!document.activeElement?.closest('#summaryAttendanceForm,#participantSearch'))render()}catch{team.error='공유 자료 확인 실패 · 기기의 현재 자료는 유지됩니다.';showTeamStatus()}},60000);
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&team.active&&!configPending&&location.hash!=='#appearance')void loadTeamMonth().then(()=>{if(!$('#dialog').open)render()}).catch(()=>{})});

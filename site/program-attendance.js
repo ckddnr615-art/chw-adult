@@ -94,7 +94,7 @@ function programSessionMarkup(session,day){
         const state=entry?.checked?(entry.participationOverride==='include'?'참여 확인':'출석 연동'):
           row.dayStatus==='결석'?'결석':entry?.participationOverride==='exclude'?'불참':
           entry?'취소':row.dayStatus==='출석'?'참여 확인 필요':'미출석';
-        const sync=entry?.sync==='synced'?(entry.checked?'영역 실적 반영':'정정 반영'):
+        const sync=entry?.sync==='synced'?(entry.checked?'시트 반영':'정정 반영'):
           entry?.sync==='error'?'반영 실패':entry?.sync==='pending'?'반영 대기':'—';
         const command={memberId:row.memberId,date:day,scheduleId:session.scheduleId,entryId:entry?.id||'',expectedVersion:entry?.version||0};
         const canEdit=team.active&&team.authenticated&&row.dayStatus==='출석'&&(entry||session.scheduled);

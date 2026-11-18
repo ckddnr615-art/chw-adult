@@ -1,7 +1,44 @@
 /* Presentation changes only: attendance commands and achievement rules remain in operations.js. */
+let participantSearchQuery='';
+function participantSearchMarkup(){
+ return '<section class="participant-search"><label for="participantSearch">이름으로 오늘 프로그램 찾기</label>'+
+  '<input type="search" id="participantSearch" placeholder="이름을 입력해 주세요" autocomplete="off" value="'+esc(participantSearchQuery)+'">'+
+  '<div id="participantSearchResults" class="participant-search-results" role="group" aria-label="이름 검색 결과"></div></section>';
+}
+function bindParticipantSearch(){
+ const search=$('#participantSearch'),results=$('#participantSearchResults');
+ const paint=()=>{
+  participantSearchQuery=search.value;
+  const query=participantSearchQuery.normalize('NFKC').trim().replace(/\s/g,'');
+  results.innerHTML='';
+  if(!query)return;
+  const matches=people.filter(person=>person.name.normalize('NFKC').replace(/\s/g,'').includes(query));
+  if(!matches.length){results.textContent='일치하는 이름이 없어요.';return}
+  for(const person of matches){
+   const button=document.createElement('button');
+   button.type='button';
+   button.className='secondary';
+   button.textContent=person.name+' · '+person.group;
+   button.disabled=!team.active;
+   button.onclick=()=>openPublicCheckin(person.id);
+   results.append(button);
+  }
+ };
+ search.oninput=paint;
+ paint();
+}
 function personalDaySummary(member){
  const items=management.personalSchedules(member.id,date);
- return `${management.afternoonClosed(date)?'<p>오늘은 오후 프로그램이 없어요.</p>':''}<details class="my-day"><summary>나의 오늘 활동 · ${items.length}개</summary>${items.length?`<ul>${items.map(s=>`<li><time>${esc(s.start)} ~ ${esc(s.end)}</time><strong>${esc(s.program.name)}</strong><span>${esc(s.location)}</span></li>`).join('')}</ul>`:'<p>등록된 활동이 없어요. 직원에게 물어봐 주세요.</p>'}</details>`;
+ const period=attendancePeriod(member.id,date);
+ const hasAllDay=items.some(item=>ManagementStore.scheduleSlot(item)==='all-day');
+ return '<div class="participation-day" aria-label="오늘 참여 프로그램">'+ManagementStore.timeSlots().map(({id,name:label})=>{
+  const programs=items.filter(item=>ManagementStore.scheduleSlot(item)===id);
+  if(id==='all-day'&&!programs.length)return '';
+  const recorded=period==='both'||period===(id==='morning'?'am':id==='afternoon'?'pm':null);
+  const lines=programs.map(s=>'<li><strong>'+esc(s.program.name)+'</strong><span>시간 '+esc(s.start)+' ~ '+esc(s.end)+'</span><span>장소 '+esc(s.location||'직원에게 물어봐 주세요')+'</span></li>').join('');
+  return '<section><h3>'+label+' 프로그램</h3>'+(lines?'<ul>'+lines+'</ul>':'<p>'+(hasAllDay?'종일 프로그램에 포함돼요.':'예정된 프로그램이 없어요.')+'</p>')+
+   (recorded&&(lines||hasAllDay)?'<p class="participation-recorded">✓ '+label+' 출석 기록됨</p>':'')+'</section>';
+ }).join('')+'</div>';
 }
 function persistentCommunityPicker(selected){
  const original=management.list('communities');
@@ -16,12 +53,13 @@ kiosk=function(){
  const common=selected?management.schedulesOn(date).filter(s=>s.communityId===community?.id&&s.audienceMode!=='individual'):[];
  const holidayPending=!holidayYears.has(date.slice(0,4));
  const message=team.error?'Google 공동 저장 연결 설정이 필요합니다. 직원에게 도움을 요청해 주세요.':closed?`오늘은 ${esc(closed)}입니다. 출석은 직원에게 물어봐 주세요.`:holidayPending?'오늘 활동을 확인하고 있어요. 잠시 기다려 주세요.':management.afternoonClosed(date)?'오늘은 오후 프로그램이 없어요.':'';
- return `<div class="kiosk-flow ${selected?'has-selection':''}"><div class="welcome-line"><span>성인지원팀 · 출석하기</span>${clockMarkup()}</div>${message?`<p class="public-service-notice" role="status">${message}</p>`:''}<div class="compact-welcome">${bannerMarkup('kiosk')}</div><div class="persistent-kiosk-tools ${selected?'selected-tools':''}">${persistentCommunityPicker(selected)}${kioskQuickRoster()}</div>${selected?`<section id="selectedContent" class="people-stage" aria-labelledby="choosePerson"><div class="sectionintro"><div><p class="selected-affiliation">${esc(participantGroup)}</p><h2 id="choosePerson">내 사진이나 이름을 눌러 주세요</h2><p>내가 맞는지 한 번 더 확인해요.</p></div></div><div class="attendancecards">${people.filter(p=>p.group===participantGroup).map(p=>`<button class="personcard ${participantState(p)}" data-checkin="${esc(p.id)}"><span class="avatar" aria-hidden="true">${esc(p.name.slice(0,1))}</span><b>${esc(p.name)}</b><small>${participantLabel(p)}</small></button>`).join('')||'<p>등록된 사람이 없어요. 직원에게 물어봐 주세요.</p>'}</div></section><details class="kiosk-secondary"><summary>소속의 공통 일정 보기 · ${common.length}개</summary><p>나의 실제 활동은 사진을 누른 뒤 확인할 수 있어요.</p><div class="participant-schedule-grid">${common.map(s=>`<div class="participant-schedule"><div><b>${esc(s.program.name)}</b><p>${esc(s.start)} ~ ${esc(s.end)} · ${esc(s.location)}</p></div></div>`).join('')||'<p>등록된 공통 일정이 없어요.</p>'}</div></details>`:''}<div class="bottomhelp"><span>고르기 어려우신가요?</span><button id="askStaff" class="secondary">직원에게 도움 요청하기</button></div></div>`;
+ return `<div class="kiosk-flow ${selected?'has-selection':''}"><div class="welcome-line"><span>성인지원팀 · 출석하기</span>${clockMarkup()}</div>${message?`<p class="public-service-notice" role="status">${message}</p>`:''}<div class="compact-welcome">${bannerMarkup('kiosk')}</div>${participantSearchMarkup()}<div class="persistent-kiosk-tools ${selected?'selected-tools':''}">${persistentCommunityPicker(selected)}${kioskQuickRoster()}</div>${selected?`<section id="selectedContent" class="people-stage" aria-labelledby="choosePerson"><div class="sectionintro"><div><p class="selected-affiliation">${esc(participantGroup)}</p><h2 id="choosePerson">내 사진이나 이름을 눌러 주세요</h2><p>내가 맞는지 한 번 더 확인해요.</p></div></div><div class="attendancecards">${people.filter(p=>p.group===participantGroup).map(p=>`<button class="personcard ${participantState(p)}" data-checkin="${esc(p.id)}"><span class="avatar" aria-hidden="true">${esc(p.name.slice(0,1))}</span><b>${esc(p.name)}</b><small>${participantLabel(p)}</small></button>`).join('')||'<p>등록된 사람이 없어요. 직원에게 물어봐 주세요.</p>'}</div></section><details class="kiosk-secondary"><summary>소속의 공통 일정 보기 · ${common.length}개</summary><p>나의 실제 활동은 사진을 누른 뒤 확인할 수 있어요.</p><div class="participant-schedule-grid">${common.map(s=>`<div class="participant-schedule"><div><b>${esc(s.program.name)}</b><p>${esc(s.start)} ~ ${esc(s.end)} · ${esc(s.location)}</p></div></div>`).join('')||'<p>등록된 공통 일정이 없어요.</p>'}</div></details>`:''}<div class="bottomhelp"><span>고르기 어려우신가요?</span><button id="askStaff" class="secondary">직원에게 도움 요청하기</button></div></div>`;
 };
 const previousPickerBind=bindManagement;
 bindManagement=function(page){
  previousPickerBind(page);
  if(page!=='kiosk')return;
+ bindParticipantSearch();
  document.querySelectorAll('[data-participant-group]').forEach(button=>button.onclick=()=>{
   participantGroup=button.dataset.participantGroup;render();say(participantGroup+'를 골랐어요. 내 사진이나 이름을 눌러 주세요.');
   document.querySelector('.compact-picker')?.scrollIntoView({block:'start',behavior:'instant'});

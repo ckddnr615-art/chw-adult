@@ -4,14 +4,17 @@
   const uid=()=>globalThis.crypto.randomUUID();
   class ManagementStore {
     constructor(data){this.data=clone(data);this.upgradeTimetable()}
-    static timeSlots(){return [{id:'morning',name:'오전',start:'10:00',end:'11:30'},{id:'afternoon1',name:'오후 1',start:'13:00',end:'14:30'},{id:'afternoon2',name:'오후 2',start:'14:30',end:'15:40'}]}
+    static timeSlots(){return [{id:'morning',name:'오전',start:'10:00',end:'11:30'},{id:'afternoon',name:'오후',start:'13:00',end:'15:40'},{id:'all-day',name:'종일',start:'10:00',end:'15:40'}]
+    }
+    static scheduleSlot(schedule){return schedule.start>='13:00'?'afternoon':schedule.end<='13:00'?'morning':'all-day';
+    }
     static addDays(d,n){const date=new Date(d+'T12:00:00Z');date.setUTCDate(date.getUTCDate()+n);return date.toISOString().slice(0,10)}
     upgradeTimetable(){
       this.data.banners||=[];this.data.closures||=[];this.data.staff||=[];this.data.caseAssignments||=[];this.data.enrollments||=[];this.data.scheduleOverrides||=[];
       // Freeze legacy group audiences on schedules; area edits must not move their participants.
       for(const schedule of this.data.schedules)if(!Object.hasOwn(schedule,'communityId')){const program=this.data.programs.find(p=>p.id===schedule.programId);schedule.communityId=this.data.areas.find(a=>a.id===program?.areaId)?.communityId||''}
       for(const program of this.data.programs){if(!program.facilitatorIds){let staff=this.data.staff.find(s=>s.name===program.staff);if(!staff&&program.staff&&program.active!==false){staff={id:uid(),name:program.staff,active:true};this.data.staff.push(staff)}program.facilitatorIds=staff?[staff.id]:[]}}
-      if(!this.data.timetableVersion){for(const schedule of this.data.schedules){schedule.seriesId||=schedule.id;schedule.audienceMode||='community';if(schedule.active!==false&&!schedule.date&&/^schedule-[1-4]$/.test(schedule.id)){const slot=ManagementStore.timeSlots().find(s=>schedule.start<s.end)||ManagementStore.timeSlots()[2];schedule.legacyTime={start:schedule.start,end:schedule.end};schedule.start=slot.start;schedule.end=slot.end;schedule.slotId=slot.id}}this.data.timetableVersion=1}
+      if(!this.data.timetableVersion){for(const schedule of this.data.schedules){schedule.seriesId||=schedule.id;schedule.audienceMode||='community';if(schedule.active!==false&&!schedule.date&&/^schedule-[1-4]$/.test(schedule.id)){const legacySlots=[{id:'morning',name:'오전',start:'10:00',end:'11:30'},{id:'afternoon1',name:'오후 1',start:'13:00',end:'14:30'},{id:'afternoon2',name:'오후 2',start:'14:30',end:'15:40'}];const slot=legacySlots.find(s=>schedule.start<s.end)||legacySlots[2];schedule.legacyTime={start:schedule.start,end:schedule.end};schedule.start=slot.start;schedule.end=slot.end;schedule.slotId=slot.id}}this.data.timetableVersion=1}
     }
     staffNames(ids){return (ids||[]).map(id=>this.find('staff',id)?.name).filter(Boolean).join(' · ')}
     caseManagerAt(memberId,d){return this.data.caseAssignments.filter(a=>a.memberId===memberId&&a.from<=d&&(!a.to||a.to>=d)&&a.active!==false).sort((a,b)=>a.from.localeCompare(b.from)).at(-1)?.staffId||''}
@@ -116,7 +119,7 @@
         item.weekdays=(item.weekdays||[]).map(Number).filter(n=>Number.isInteger(n)&&n>=0&&n<=6);
         if(!item.date&&!item.weekdays.length)throw Error('운영 날짜 또는 반복 요일을 선택해 주세요.');
         if(item.facilitatorIds&&item.facilitatorIds.some(id=>!this.list('staff').some(s=>s.id===id)))throw Error('진행 직원을 확인해 주세요.');
-        item.slotId=ManagementStore.timeSlots().find(s=>s.start===item.start&&s.end===item.end)?.id||'custom';
+        item.slotId=ManagementStore.scheduleSlot(item);
         item.audienceMode=item.audienceMode||'community';
         if(!['community','individual'].includes(item.audienceMode))throw Error('배정 방식을 확인해 주세요.');
         item.location=String(item.location||'').trim();if(!item.location||item.location.length>120)throw Error('장소를 1~120자로 입력해 주세요.');
@@ -200,22 +203,42 @@
       if(entryId&&!existing||Number(existing?.version||0)!==expectedVersion)throw Object.assign(Error('다른 직원이 참여 실적을 먼저 수정했습니다. 최신 기록을 확인해 주세요.'),{conflict:true});
       if(!existing&&(!schedule||!checked))throw Error('정정할 프로그램을 확인해 주세요.');
       const entry=this.setParticipation(memberId,scheduleId,date,checked,{entryId,allowUnassigned:checked,matchCurrent:true});
+      if(this.data.days[date+':'+memberId]?.reportMode==='program')entry.reportMode='program';
       entry.participationOverride=checked?'include':'exclude';
       entry.correctedBy=actor;
       return entry;
     }
-    applyAttendance(records,memberId,d,nextStatus,recalculate=false){
+    static inParticipationPeriod(schedule,period){
+      if(period==='am')return (schedule.start||'')<'13:00';
+      if(period==='pm')return (schedule.end||schedule.start||'')>'13:00';
+      return true;
+    }
+    applyAttendance(records,memberId,d,nextStatus,recalculate=false,participation,locked){
       if(!['출석','결석',''].includes(nextStatus))throw Error('출석·결석·미입력 중 선택해 주세요.');
       const member=this.find('members',memberId);if(!member)throw Error('참여자를 찾을 수 없습니다.');
       this.captureDays(records);const key=d+':'+memberId,previous=records[key]||'';records[key]=nextStatus;this.captureDays(records);
+      const day=this.data.days[key];
+      const previousPeriod=day?.participation;
+      if(day&&participation&&nextStatus==='출석'){
+        day.participation=participation;
+        day.participationLocked=!!locked;
+        // A day with pre-existing output stays on its original aggregation format.
+        if(!day.reportMode)day.reportMode=this.data.entries.some(e=>e.memberId===memberId&&e.date===d)?'area':'program';
+      }else if(day&&nextStatus!=='출석'){
+        delete day.participation;
+        delete day.participationLocked;
+      }
       let generated=0,cancelled=0;
       if(nextStatus==='출석'){
         if(member.active===false&&previous!=='출석')throw Error('삭제한 참여자는 복구 후 출석을 입력해 주세요.');
         if(previous==='출석'&&!recalculate)return {memberId,date:d,status:nextStatus,generated,cancelled};
-        const schedules=this.personalSchedules(memberId,d);
+        const period=day?.participation||'both';
+        const schedules=this.personalSchedules(memberId,d).filter(s=>ManagementStore.inParticipationPeriod(s,period));
         const entries=this.data.entries.filter(e=>e.memberId===memberId&&e.date===d);
         for(const entry of entries){
-          if(entry.participationOverride==='include'){
+          if(!ManagementStore.inParticipationPeriod(entry,period)){
+            if(entry.checked){this.deleteEntry(entry.id);cancelled++}
+          }else if(entry.participationOverride==='include'){
             if(!entry.checked)this.setParticipation(memberId,entry.scheduleId,d,true,{entryId:entry.id});
           }else if(entry.checked&&!schedules.some(s=>this.entryMatchesSchedule(entry,s))){
             this.deleteEntry(entry.id);cancelled++;
@@ -225,6 +248,7 @@
           if(entries.some(e=>e.scheduleId===schedule.id&&e.programId===schedule.program.id&&e.participationOverride==='exclude'))continue;
           if(entries.some(e=>this.entryMatchesSchedule(e,schedule)&&e.checked))continue;
           const entry=this.setParticipation(memberId,schedule.id,d,true,{matchCurrent:true});
+          if(day?.reportMode==='program')entry.reportMode='program';
           entry.source=entry.source||'arrival_auto';
           entry.basis='scheduled_on_arrival';
           entry.attendanceLinked=true;
@@ -232,6 +256,7 @@
         }
       }else for(const e of this.data.entries.filter(e=>e.memberId===memberId&&e.date===d&&e.checked)){this.deleteEntry(e.id);e.cancelReason=nextStatus==='결석'?'출결 결석 변경':'출결 미입력 변경';cancelled++}
       if(previous!==nextStatus)this.audit('출결 변경','days',key,previous,nextStatus);
+      else if(participation&&previousPeriod!==participation)this.audit('참여 시간 변경','days',key,previousPeriod||'both',participation);
       return {memberId,date:d,status:nextStatus,generated,cancelled};
     }
     expectedOn(memberId,d){const member=this.find('members',memberId);return !!member&&this.personalSchedules(memberId,d).length>0}

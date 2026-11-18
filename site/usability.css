@@ -45,6 +45,25 @@ body:not(.participant-mode) dialog:has(.assignment-picker){width:760px;max-width
 @media(max-width:760px){.participant-mode .kiosk-flow .compact-picker .groupchoice,.participant-mode .kiosk-flow .compact-picker .groupchoice.selected{grid-template-rows:48px 20px;min-height:100px}}
 .banner-slot-tabs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.banner-slot-tabs button{margin:0}
 .banner-slot-tabs #swapBannerPhotos{grid-column:1/-1}
+.participant-search{display:grid;gap:8px;margin:0 0 20px}
+.participant-search label{font-size:1.125rem;font-weight:700}
+.participant-search input{width:min(100%,32rem);min-height:48px;font-size:1.125rem}
+.participant-search-results{display:flex;flex-wrap:wrap;gap:8px}
+.participant-search-results:empty{display:none}
+.participant-search-results button{min-height:44px;font-size:1.0625rem}
+.participation-day{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:16px 0;text-align:left}
+.participation-day:has(section:nth-child(3)) section:last-child{grid-column:1/-1}
+.participation-day section{border:1px solid #adbdcf;border-radius:12px;padding:12px;min-width:0}
+.participation-day h3{margin:0 0 8px;font-size:1.25rem}
+.participation-day ul{list-style:none;margin:0;padding:0}
+.participation-day li{display:grid;gap:4px;padding:8px 0;overflow-wrap:anywhere}
+.participation-day li+li{border-top:1px solid #ccd6e0}
+.participation-day li strong{font-size:1.2rem}
+.participation-day li span,.participation-day p{font-size:1.0625rem;margin:0}
+.participation-recorded{font-weight:700}
+.participation-actions{display:grid;gap:8px}
+.participation-actions button{min-height:48px;font-size:1.125rem}
+@media(max-width:520px){.participation-day{grid-template-columns:minmax(0,1fr)}}
 .program-workspace-actions{display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin:18px 0 28px}.program-workspace-actions .secondary{display:inline-flex;align-items:center;min-height:44px;padding:12px 18px;border:1px solid #d2deed;border-radius:10px;background:#fff;color:#345591}.weekly-timetable td[rowspan]{vertical-align:top}
 .banner-photo-fields .checklabel{display:flex;align-items:center;gap:10px}.banner-photo-fields .checklabel input[type=checkbox]{width:18px;height:18px;min-height:18px;padding:0}
 

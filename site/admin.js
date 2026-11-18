@@ -1,7 +1,7 @@
 /* Editable local workspace. Google writes require a configured authenticated API. */
 const management=new ManagementStore(saved.management||ManagementStore.seed(groups,people,programs,records));
 management.captureDays(records);
-let managementFilter='',showArchived=false,performanceDate=date,performanceSchedule='',reportGroup='',reportMonth=date.slice(0,7),syncBusy=false;
+let managementFilter='',showArchived=false,performanceDate=date,performanceSchedule='',reportStaff='',reportMonth=date.slice(0,7),syncBusy=false;
 let apiState={available:false,configured:false,authenticated:false};
 const sheetAppUrl='https://script.google.com/a/macros/chw.or.kr/s/AKfycbynQmENIw4yEEKwpt4hA-lV2ueHel6zSWOJDzG5LFbqNGe8VCk2sywf0IzrFP62ZrbM/exec';
 const typeNames={members:'참여자',communities:'커뮤니티',areas:'영역',programs:'프로그램',schedules:'일정',staff:'직원'};
@@ -75,18 +75,55 @@ function openEditor(type,id=''){
 function deleteItem(type,id){const item=management.find(type,id);modal(`<h2>${typeNames[type]} 삭제</h2><p>${esc(item.name||management.find('programs',item.programId)?.name||'일정')}을 현재 목록에서 삭제할까요?</p><p>이전 출석과 실적은 삭제되지 않습니다. 삭제한 항목 보기에서 복구할 수 있습니다.</p>${type==='programs'?'<p>연결된 일정은 운영 화면에서 숨겨지고, 프로그램 복구 시 다시 사용할 수 있습니다.</p>':''}<button id="confirmEntityDelete" class="primary danger">삭제</button>`);$('#confirmEntityDelete').onclick=()=>{if(transaction(()=>management.remove(type,id))){$('#dialog').close();render();toast('현재 목록에서 삭제했습니다.')}}}
 function restoreItem(type,id){if(transaction(()=>{const item=management.find(type,id),before=JSON.stringify(item);item.active=true;try{management.save(type,id,item,date)}catch(e){Object.assign(item,JSON.parse(before));throw e}management.audit('복구',type,id,null,item)}))render()}
 
-function monthRoster(month,groupId){
-  const end=`${month}-${String(monthDays(month)).padStart(2,'0')}`;
-  return management.data.members.filter(p=>{
-    const snapshots=Object.values(management.data.days).filter(s=>s.memberId===p.id&&s.date.startsWith(month)&&records[`${s.date}:${p.id}`]);
-    if(snapshots.some(s=>!groupId||s.communityId===groupId))return true;
-    if(!p.active||!(p.history||[]).some(h=>h.from<=end))return false;
-    return Array.from({length:monthDays(month)},(_,i)=>`${month}-${String(i+1).padStart(2,'0')}`).some(d=>!groupId||management.memberGroupAt(p,d)===groupId);
-  });
+function caseRegisterGroups(store,attendance,month,today){
+  const dates=registerDates(month);
+  const groups=new Map();
+  for(const member of store.data.members){
+    if(member.active===false&&!dates.some(day=>attendance[day+':'+member.id]))continue;
+    const assignedRows=new Map();
+    for(const [index,day] of dates.entries()){
+      const key=day+':'+member.id;
+      const archiveDay=member.deletedAt?.slice(0,10);
+      if(!attendance[key]&&(!store.memberGroupAt(member,day)||(member.active===false&&(!archiveDay||day>archiveDay))))continue;
+      const staffId=store.caseManagerAt(member.id,day)||'unassigned';
+      if(!assignedRows.has(staffId))assignedRows.set(staffId,{member,cells:dates.map(()=>null)});
+      assignedRows.get(staffId).cells[index]={key,mark:store.registerMark(attendance,member.id,day,today)};
+    }
+    for(const [staffId,row] of assignedRows){
+      if(!groups.has(staffId)){
+        const staff=store.find('staff',staffId);
+        groups.set(staffId,{id:staffId,name:staff?.name||'미지정',archived:staff?.active===false,rows:[]});
+      }
+      groups.get(staffId).rows.push(row);
+    }
+  }
+  return [...groups.values()].sort((a,b)=>a.id==='unassigned'?1:b.id==='unassigned'?-1:a.name.localeCompare(b.name,'ko'));
 }
-function registerRows(month,groupId){return monthRoster(month,groupId).map(p=>[p.name,...Array.from({length:monthDays(month)},(_,i)=>{const d=`${month}-${String(i+1).padStart(2,'0')}`,key=`${d}:${p.id}`,snapshot=management.data.days[key];if(groupId&&(snapshot?.communityId||management.memberGroupAt(p,d))!==groupId)return '';const s=records[key];return management.registerMark(records,p.id,d,date)})])}
-monthTable=function(month){if(!holidayYears.has(month.slice(0,4)))return '<p class="notice">공휴일 확인 후 출석부를 표시합니다.</p>';const rows=registerRows(month,reportGroup);return `<table class="monthly-grid"><caption>${esc(month)} 월별 출석부</caption><thead><tr><th scope="col">참여자</th>${Array.from({length:monthDays(month)},(_,i)=>`<th scope="col" title="${esc(management.holidayName(`${month}-${String(i+1).padStart(2,'0')}`))}">${i+1}</th>`).join('')}</tr></thead><tbody>${rows.map((row,r)=>`<tr><th scope="row">${esc(row[0])}</th>${row.slice(1).map((v,i)=>`<td><button class="daycell" data-day="${month}-${String(i+1).padStart(2,'0')}:${monthRoster(month,reportGroup)[r].id}" aria-label="${esc(row[0])} ${i+1}일 ${v==='/'?'출석':v==='O'?'결석':v==='휴'?'휴무일':'미입력'} 수정">${v||'<span class="visually-hidden">미입력</span>'}</button></td>`).join('')}</tr>`).join('')||`<tr><td colspan="${monthDays(month)+1}">해당 월에 조회할 참여자가 없습니다.</td></tr>`}</tbody></table>`};
-reports=function(){return heading('월별 출석부','각 칸을 눌러 출결을 입력·수정·삭제할 수 있습니다. 출석 / · 결석 O · 주말·공휴일·기관 휴무일 휴 (집계 제외) · 지난 운영일과 오늘의 미입력은 결석 O로 표시합니다. 휴무일을 제외한 미래 날짜와 일정 없는 날은 빈칸입니다.')+`<section class="panel"><div class="filters"><label>조회 월<input id="reportMonth" type="month" value="${reportMonth}" required></label><label>당시 소속<select id="reportGroup"><option value="">전체 소속</option>${opts(management.data.communities,reportGroup)}</select></label><button class="secondary" data-print-document>인쇄 / PDF 저장</button><button id="exportRegister" class="secondary">↓ 월별 CSV 다운로드</button></div><p class="notice">소속 이동 전 기록은 당시 커뮤니티에 유지됩니다. 삭제한 참여자도 해당 월의 기록이 있으면 표시됩니다.</p><div id="monthTable" class="tablewrap">${monthTable(reportMonth)}</div></section>`};
+function registerDates(month){return Array.from({length:monthDays(month)},(_,i)=>month+'-'+String(i+1).padStart(2,'0'))}
+function visibleRegisterGroups(month){return caseRegisterGroups(management,records,month,date).filter(group=>!reportStaff||group.id===reportStaff)}
+function registerCell(cell,member,index){
+  if(!cell)return '<td class="register-unassigned-day"></td>';
+  const period=management.data.days[cell.key]?.participation;
+  const label=cell.mark==='/'?(period==='am'?'오전만 참여':period==='pm'?'오후만 참여':'출석'):cell.mark==='O'?'결석':cell.mark==='휴'?'휴무일':'미입력';
+  const hint=member.name+' '+(index+1)+'일 '+label;
+  return '<td><button class="daycell" data-day="'+esc(cell.key)+'" title="'+esc(label)+'" aria-label="'+esc(hint)+' 수정">'+(cell.mark||'<span class="visually-hidden">미입력</span>')+'</button></td>';
+}
+monthTable=function(month){
+  if(!holidayYears.has(month.slice(0,4)))return '<p class="notice">공휴일 확인 후 출석부를 표시합니다.</p>';
+  const dates=registerDates(month),columns=dates.length+1;
+  const headings=dates.map((day,index)=>'<th scope="col" title="'+esc(management.holidayName(day))+'">'+(index+1)+'</th>').join('');
+  const body=visibleRegisterGroups(month).map(group=>{
+    const rows=group.rows.map(({member,cells})=>'<tr><th scope="row">'+esc(member.name)+'</th>'+cells.map((cell,index)=>registerCell(cell,member,index)).join('')+'</tr>').join('');
+    return '<tbody><tr class="register-staff"><th scope="rowgroup" colspan="'+columns+'">'+esc(group.name)+(group.archived?' (삭제한 직원)':'')+'</th></tr>'+rows+'</tbody>';
+  }).join('')||'<tbody><tr><td colspan="'+columns+'">해당 월에 조회할 참여자가 없습니다.</td></tr></tbody>';
+  return '<table class="monthly-grid"><caption>'+esc(month)+' 사례관리 담당자별 출석부</caption><thead><tr><th scope="col">참여자</th>'+headings+'</tr></thead>'+body+'</table>';
+};
+reports=function(){
+  const staff=caseRegisterGroups(management,records,reportMonth,date);
+  const options='<option value="">전체 담당자</option>'+opts(staff,reportStaff,s=>s.name+(s.archived?' (삭제한 직원)':''));
+  return heading('월별 출석부','출석 / · 결석 O · 주말과 휴무일 휴. 지난 운영일과 오늘의 미입력은 결석으로 표시합니다.')+
+    '<section class="panel"><div class="filters"><label>조회 월<input id="reportMonth" type="month" value="'+esc(reportMonth)+'" required></label><label>사례관리 담당자<select id="reportStaff">'+options+'</select></label><button class="secondary" data-print-document>인쇄 / PDF 저장</button><button id="exportRegister" class="secondary">↓ 월별 CSV 다운로드</button></div><p class="notice">담당자가 바뀐 날부터 새 담당자 출석부에 표시됩니다. 날짜 칸을 눌러 출결을 수정할 수 있습니다.</p><div id="monthTable" class="tablewrap">'+monthTable(reportMonth)+'</div></section>';
+};
 function editDay(key){const d=key.slice(0,10),id=key.slice(11),member=management.find('members',id);if(d>date){toast('미래 날짜에는 출결을 기록할 수 없습니다.');return}modal(`<h2>${esc(member.name)} · ${d}</h2><form id="dayForm" class="entityform"><label>출결 상태<select name="status">${['','출석','결석','지각','조퇴'].map(s=>`<option value="${s}" ${records[key]===s?'selected':''}>${s||'미입력 (기록 삭제)'}</option>`).join('')}</select></label><button type="submit" class="primary">저장</button></form>`);$('#dayForm').onsubmit=e=>{e.preventDefault();const value=new FormData(e.target).get('status');if(transaction(()=>{management.audit(value?'출결 수정':'출결 삭제','days',key,records[key]||'',value);records[key]=value})){$('#dialog').close();render();toast('출결을 저장했습니다.')}}}
 
 function syncLabel(entry){return entry.sync==='synced'?'Google 저장 확인':entry.sync==='error'?'전송 실패 · 재시도 필요':apiState.configured?'전송 대기':'미연결 · 전송 대기'}
@@ -115,7 +152,7 @@ async function flushPerformance(){
     }
   }finally{syncBusy=false;if(['performance','workspace'].includes(location.hash.slice(1)))render()}
 }
-function exportEntries(entries,name){csv([['이름','','','','','','사업날짜','영역명','','','','담당자','','출석고유키(자동)'],...PerformanceProjection.aggregate(entries).filter(e=>e.checked).map(e=>PerformanceProjection.columns(e))],name)}
+function exportEntries(entries,name){csv([['이름','','','','','','사업날짜','프로그램명 (기존 영역명 포함)','','','','담당자','','출석고유키(자동)'],...PerformanceProjection.aggregate(entries).filter(e=>e.checked).map(e=>PerformanceProjection.columns(e))],name)}
 function bindManagement(page){
  if($('#programStatusFilter'))$('#programStatusFilter').onchange=e=>{programStatusFilter=e.target.value;render()};
  document.querySelectorAll('[data-program-toggle]').forEach(button=>button.onclick=()=>{const id=button.dataset.programToggle,enabled=!management.programEnabled(id,date);if(transaction(()=>management.setProgramEnabled(id,enabled,date))){render();toast(enabled?'프로그램을 활성화했습니다.':'오늘부터 프로그램을 비활성화했습니다.')}});
@@ -128,9 +165,13 @@ function bindManagement(page){
   if($('#managementFilter'))$('#managementFilter').onchange=e=>{managementFilter=e.target.value;render()};
   if($('#showArchived'))$('#showArchived').onchange=e=>{showArchived=e.target.checked;render()};
   if(page==='reports'){
-    $('#reportMonth').onchange=e=>{if(e.target.value){reportMonth=e.target.value;render()}};
-    $('#reportGroup').onchange=e=>{reportGroup=e.target.value;render()};
-    $('#exportRegister').onclick=()=>csv([['이름',...Array.from({length:monthDays(reportMonth)},(_,i)=>i+1)],...registerRows(reportMonth,reportGroup)],`${reportMonth}_출석부.csv`);
+    $('#reportMonth').onchange=e=>{if(e.target.value){reportMonth=e.target.value;reportStaff='';render()}};
+    $('#reportStaff').onchange=e=>{reportStaff=e.target.value;render()};
+    $('#exportRegister').onclick=()=>{
+      if(!holidayYears.has(reportMonth.slice(0,4))){toast('공휴일 자료 확인 후 다운로드해 주세요.');return}
+      const rows=visibleRegisterGroups(reportMonth).flatMap(group=>group.rows.map(row=>[group.name,row.member.name,...row.cells.map(cell=>cell?.mark||'')]));
+      csv([['사례관리 담당자','이름',...registerDates(reportMonth).map(day=>Number(day.slice(8)))],...rows],reportMonth+'_사례관리_출석부.csv');
+    };
     document.querySelectorAll('[data-day]').forEach(b=>b.onclick=()=>editDay(b.dataset.day));
   }
   if(page==='performance'){

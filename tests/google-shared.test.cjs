@@ -327,3 +327,45 @@ test('관리자가 기록한 결석은 오래된 출석 버튼과 이전 요청 
  assert.equal(e.sheets.get('검증 실적').getLastRow(),2);
  assert.equal(e.sheets.get('검증 실적').rows[1][0],'검증 이용인');
 });
+
+test('사진 조회는 출석 저장 잠금과 운영 자료를 기다리지 않는다',()=>{
+ const e=environment(),dataUrl='data:image/jpeg;base64,/9j/2Q==';
+ assert.equal(e.call('/api/team/photos/missing/abcdef',{},'GET').status,404);
+ assert.equal(e.sheets.has('__CH_APP_PHOTOS'),false);
+ e.login();
+ const photo=e.call('/api/team/photo',{id:crypto.randomUUID(),dataUrl}).body;
+ e.logout();
+ e.context.LockService.getScriptLock=()=>({tryLock:()=>false});
+ assert.equal(e.call(photo.url,{},'GET').binary,'/9j/2Q==');
+ assert.equal(e.call(photo.url,{},'GET','https://evil.test').status,403);
+ assert.equal(e.call('/api/team/checkin',{memberId:'person-1',requestId:crypto.randomUUID()}).body.busy,true);
+});
+
+test('오전·오후 출석을 합산하고 같은 영역의 다른 프로그램을 별도 실적으로 기록한다',()=>{
+ const e=environment(),day='2026-11-11',memberId='person-1',key=day+':'+memberId;
+ const {model,first,other,staff}=variableScheduleFixture(e);
+ const programId=first.programId;
+ model.save('schedules','',{programId,date:day,start:'11:35',end:'12:00',location:'활동실',communityId:'community-1',facilitatorIds:[staff.id]},day);
+ e.context.Utilities.formatDate=()=>day;
+ e.login();assert.equal(e.call('/api/team/initialize',{management:model.data,records:{}}).status,200);
+ const check=participation=>({memberId,participation,requestId:crypto.randomUUID()});
+ const am=check('am'),pm=check('pm');
+ const firstCheck=e.call('/api/team/checkin',am);
+ assert.equal(firstCheck.status,200);assert.equal(firstCheck.body.participation,'am');assert.equal(firstCheck.body.reportReceipt.synced,1);
+ const secondCheck=e.call('/api/team/checkin',pm);
+ assert.equal(secondCheck.status,200);assert.equal(secondCheck.body.participation,'both');assert.equal(secondCheck.body.reportReceipt.synced,2);
+ assert.equal(e.call('/api/team/checkin',am).body.participation,'both');
+ const sheet=e.sheets.get('검증 실적');
+ assert.equal(sheet.rows[0][7],'프로그램명');
+ assert.equal(sheet.rows.slice(1).filter(r=>r[0]).map(r=>r[7]).sort().join('|'),[model.find('programs',programId).name,other.name].sort().join('|'));
+ const state=()=>e.call('/api/team/state?month=2026-11',{},'GET').body;
+ assert.equal(state().days[key].participation,'both');
+ const change=(status,expectedStatus,participation,expectedParticipation)=>e.call('/api/team/attendance',{memberId,date:day,status,expectedStatus,participation,expectedParticipation,requestId:crypto.randomUUID()});
+ assert.equal(change('출석','출석','am','both').body.reportReceipt.synced,1);
+ assert.equal(change('출석','출석','pm','both').status,409);
+ assert.equal(e.call('/api/team/checkin',check('pm')).body.code,'PERIOD_LOCKED');
+ assert.equal(change('결석','출석',undefined,'am').status,200);
+ assert.equal(e.call('/api/team/checkin',check('am')).body.code,'ABSENCE_LOCKED');
+ assert.equal(state().records[key],'결석');
+ assert.equal(sheet.rows.slice(1).filter(r=>r[0]).length,0);
+});

@@ -17,3 +17,18 @@ test('직원 일정이 많아도 모든 내용을 유지하는 배율로 한 페
 test('이미 한 장에 들어가면 불필요하게 축소하지 않는다',()=>{
  assert.equal(context.singlePagePrintScale(()=>({width:1046,height:600}),1047,710),1);
 });
+
+test('담당자 변경 전후의 출석부가 날짜 기준으로 나뉘고 미지정 참여자도 포함된다',()=>{
+ const Store=require('../site/domain.js');
+ const adminSource=fs.readFileSync(require.resolve('../site/admin.js'),'utf8');
+ const register=vm.runInNewContext(adminSource.slice(adminSource.indexOf('function caseRegisterGroups('),adminSource.indexOf('function visibleRegisterGroups('))+'\ncaseRegisterGroups',{monthDays:()=>30});
+ const store=new Store(Store.seed(['소속'],[{id:'a',name:'참여자1',group:'소속'},{id:'b',name:'참여자2',group:'소속'}],[['10:00','11:30','프로그램','소속','활동실','첫 담당자']],{}));
+ const previous=store.data.staff[0],next=store.save('staff','',{name:'새 담당자'},'2026-11-10');
+ store.assignCaseManager('a',previous.id,'2026-10-01');store.assignCaseManager('a',next.id,'2026-11-10');
+ const attendance={'2026-11-09:a':'출석','2026-11-10:a':'결석'};
+ const groups=register(store,attendance,'2026-11','2026-11-18');
+ const before=groups.find(g=>g.id===previous.id).rows[0].cells,after=groups.find(g=>g.id===next.id).rows[0].cells;
+ assert.equal(before[8].mark,'/');assert.equal(before[9],null);
+ assert.equal(after[8],null);assert.equal(after[9].mark,'O');
+ assert.equal(groups.find(g=>g.id==='unassigned').rows[0].member.id,'b');
+});

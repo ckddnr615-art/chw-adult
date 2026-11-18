@@ -6,11 +6,13 @@ function writeProjectedPerformance_(entry,props) {
   if(registered&&!sheet)throw Error('연결된 실적 탭이 삭제되었습니다. 기존 탭을 복구해 주세요.');
   if(sheet)tab=sheet.getName();var aliases=[tab].concat(registered?registered.names:[]);
   if(!sheet&&entry.memberId)sheet=book.insertSheet(tab);if(!sheet)throw Error('대상 시트가 없습니다. 매핑을 확인하세요.');
-  var expected=entry.memberId?['이름','','','','','','사업날짜','영역명','','','','담당자','','출석고유키(자동)']:['이름','','','','','','사업날짜','영역명','담당자'];
+  var labelHeader=entry.reportMode==='program'?'프로그램명':'영역명';
+  var expected=entry.memberId?['이름','','','','','','사업날짜',labelHeader,'','','','담당자','','출석고유키(자동)']:['이름','','','','','','사업날짜',labelHeader,'담당자'];
   if(sheet.getLastRow()===0)sheet.getRange(1,1,1,expected.length).setValues([expected]);
   var headers=sheet.getRange(1,1,1,14).getDisplayValues()[0],staffColumn=headers[11]==='담당자'?12:9,width=staffColumn===12?14:9;
   if(staffColumn===12&&headers[13]!=='출석고유키(자동)')throw Error('자동 고유키 N열을 확인하세요.');
-  if(headers[0]!=='이름'||headers[6]!=='사업날짜'||headers[7]!=='영역명'||headers[staffColumn-1]!=='담당자')throw Error('대상 탭의 9열 헤더가 계약과 다릅니다.');
+  if(headers[0]!=='이름'||headers[6]!=='사업날짜'||!['영역명','프로그램명','프로그램명 (기존 영역명 포함)'].includes(headers[7])||headers[staffColumn-1]!=='담당자')throw Error('대상 탭의 이름·날짜·실적·담당자 열을 확인해 주세요.');
+  if(entry.reportMode==='program'&&headers[7]==='영역명')sheet.getRange(1,8).setValue(sheet.getLastRow()>1?'프로그램명 (기존 영역명 포함)':'프로그램명');
   var ledger=book.getSheetByName('__CH_PERFORMANCE_V1');
   if(!ledger){ledger=book.insertSheet('__CH_PERFORMANCE_V1');ledger.appendRow(['id','version','tab','row','checked','lastRowJson','state']);ledger.hideSheet()}
   var rows=ledger.getLastRow()>1?ledger.getRange(2,1,ledger.getLastRow()-1,7).getValues():[];
@@ -24,7 +26,7 @@ function writeProjectedPerformance_(entry,props) {
   if(destination>sheet.getMaxRows())sheet.insertRowsAfter(sheet.getMaxRows(),destination-sheet.getMaxRows());
   var range=sheet.getRange(destination,1,1,width),current=range.getDisplayValues()[0];
   var prior=old&&old[5]?JSON.parse(old[5]):Array(width).fill('');
-  var output=Array(width).fill('');if(entry.checked){output[0]=safeText_(entry.name);output[6]=entry.date;output[7]=safeText_(entry.area);output[staffColumn-1]=safeText_(entry.staff);if(width===14)output[13]=entry.reportKey||''}
+  var output=Array(width).fill('');if(entry.checked){output[0]=safeText_(entry.name);output[6]=entry.date;output[7]=safeText_(entry.reportMode==='program'?entry.program:entry.area);output[staffColumn-1]=safeText_(entry.staff);if(width===14)output[13]=entry.reportKey||''}
 
   // B~F are institution-managed manual columns, never part of projection conflict checks.
   var normalize=function(value){return String(value).replace(/^'/,'')};
