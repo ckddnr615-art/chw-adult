@@ -27,8 +27,77 @@ function dashboardProgramList(){
  return '<p class="today-program-count">오늘 '+items.length+'개 프로그램 · 시작 시간순</p><div class="today-program-groups">'+groups.map(g=>'<section class="today-program-group"><h3><time>'+esc(g.start)+'</time><span>시작 · '+g.items.length+'개</span></h3><div class="today-program-cards">'+g.items.map(s=>'<button class="today-program-card" data-occurrence="'+esc(s.id)+'" data-occurrence-date="'+date+'"><span class="today-program-time">'+esc(s.start)+' ~ '+esc(s.end)+(s.isException?' · 변경 일정':'')+'</span><strong>'+esc(s.program.name)+'</strong><span class="today-program-location">장소 · '+esc(s.location||'미정')+'</span><span class="today-program-staff">진행 · '+esc(s.program.staff||'미지정')+'</span></button>').join('')+'</div></section>').join('')+(!items.length?'<p class="notice">오늘 운영하는 프로그램이 없습니다.</p>':'')+'</div>';
 }
 
+let dashboardMonth='',calendarDay='';
+function calendarEntries(day){
+ return (management.data.calendarNotes||[]).filter(note=>note.active!==false&&(note.date||note.id)===day&&note.text.trim())
+  .sort((a,b)=>(a.time||'').localeCompare(b.time||'')||(a.staffName||'').localeCompare(b.staffName||'','ko'));
+}
+function calendarEntryLabel(note){return [note.time,note.staffName].filter(Boolean).join(' · ')}
+function dashboardCalendar(){
+ const month=dashboardMonth||date.slice(0,7),chosen=calendarDay.startsWith(month)?calendarDay:date.startsWith(month)?date:month+'-01';
+ const first=month+'-01',offset=new Date(first+'T12:00:00Z').getUTCDay();
+ const cells=Array.from({length:offset},()=>'<span class="calendar-empty" aria-hidden="true"></span>');
+ for(let n=1;n<=monthDays(month);n++){
+  const day=month+'-'+String(n).padStart(2,'0'),notes=calendarEntries(day);
+  const preview=notes.slice(0,2).map(note=>[calendarEntryLabel(note),note.text].filter(Boolean).join(' ')).join('\n');
+  cells.push('<button type="button" data-calendar-day="'+day+'" aria-pressed="'+(chosen===day)+'" '+(day===date?'aria-current="date"':'')+'><span>'+n+(day===date?'<small>오늘</small>':'')+'</span>'+(preview?'<span class="calendar-note-preview">'+esc(preview)+'</span><small class="calendar-entry-count">일정 '+notes.length+'건</small>':'')+'</button>');
+ }
+ const notes=calendarEntries(chosen);
+ const list=notes.map(note=>'<li><div><strong>'+esc(calendarEntryLabel(note)||'등록된 일정')+'</strong><p>'+esc(note.text)+'</p></div><div class="calendar-entry-actions"><button type="button" class="secondary" data-edit-calendar="'+esc(note.id)+'">수정</button><button type="button" class="secondary danger" data-delete-calendar="'+esc(note.id)+'">삭제</button></div></li>').join('');
+ return '<section class="panel dashboard-calendar" aria-labelledby="calendarTitle"><div class="panelhead"><div><h2 id="calendarTitle">월간 일정</h2><p class="calendar-today">오늘 · '+esc(prettyDate)+'</p></div><label>조회 월<input type="month" id="dashboardMonth" value="'+month+'"></label></div><div class="calendar-layout"><div><div class="calendar-weekdays" aria-hidden="true">'+[...'일월화수목금토'].map(day=>'<span>'+day+'</span>').join('')+'</div><div class="calendar-days">'+cells.join('')+'</div></div><div class="calendar-day-detail"><h3>'+chosen+' 일정</h3><ul class="calendar-entry-list">'+(list||'<li>등록된 일정이 없습니다.</li>')+'</ul><form id="calendarNoteForm" class="calendar-note-form"><h4 id="calendarFormTitle">일정 등록</h4><label for="calendarStaffName">이름</label><input id="calendarStaffName" maxlength="80" required placeholder="일정 담당자 이름"><label for="calendarTime">시간 (선택)</label><input id="calendarTime" type="time"><label for="calendarNote">일정 내용</label><textarea id="calendarNote" maxlength="1000" required rows="3" placeholder="자신의 일정을 입력해 주세요."></textarea><p id="calendarNoteFeedback" role="status"></p><div class="actions"><button type="submit" class="primary" id="saveCalendarEntry">일정 등록</button><button type="button" class="secondary" id="cancelCalendarEdit" hidden>등록으로 돌아가기</button></div></form></div></div></section>';
+}
+function bindDashboardCalendar(){
+ $('#dashboardMonth').onchange=event=>{if(event.target.value){dashboardMonth=event.target.value;calendarDay='';render()}};
+ document.querySelectorAll('[data-calendar-day]').forEach(button=>button.onclick=()=>{
+  calendarDay=button.dataset.calendarDay;render();$('#calendarStaffName').focus({preventScroll:true});
+ });
+ const form=$('#calendarNoteForm'),month=dashboardMonth||date.slice(0,7);
+ const day=calendarDay.startsWith(month)?calendarDay:date.startsWith(month)?date:month+'-01';
+ let editing=null;
+ const reset=()=>{
+  editing=null;form.reset();$('#calendarFormTitle').textContent='일정 등록';$('#saveCalendarEntry').textContent='일정 등록';$('#cancelCalendarEdit').hidden=true;$('#calendarNoteFeedback').textContent='';
+ };
+ $('#cancelCalendarEdit').onclick=reset;
+ document.querySelectorAll('[data-edit-calendar]').forEach(button=>button.onclick=()=>{
+  const note=management.data.calendarNotes.find(row=>row.id===button.dataset.editCalendar);
+  editing=JSON.parse(JSON.stringify(note));
+  $('#calendarStaffName').value=note.staffName||'';$('#calendarTime').value=note.time||'';$('#calendarNote').value=note.text;
+  $('#calendarFormTitle').textContent='일정 수정';$('#saveCalendarEntry').textContent='수정 저장';$('#cancelCalendarEdit').hidden=false;$('#calendarNoteFeedback').textContent='';$('#calendarNote').focus({preventScroll:true});
+ });
+ async function save(after,before){
+  await requireSharedWriteAccess();
+  if(!team.calendarEntries)throw Error('개별 일정 등록을 위해 Apps Script 서버를 새 버전으로 배포해 주세요.');
+  const rows=management.data.calendarNotes||(management.data.calendarNotes=[]),index=rows.findIndex(note=>note.id===after.id);
+  if(JSON.stringify(index>=0?rows[index]:null)!==JSON.stringify(before))throw Error('다른 직원이 이 일정을 수정했습니다. 최신 일정을 확인해 주세요.');
+  ManagementStore.validateCalendarNote(after);
+  if(index<0)rows.push(after);else rows[index]=after;
+  if(!persist())throw Error('일정을 저장할 준비를 하지 못했습니다.');
+  await saveTeamConfig();
+  if(team.error)throw Error(team.error);
+  render();toast(after.active===false?'일정을 삭제했습니다.':'일정을 저장했습니다.');
+ }
+ form.onsubmit=async event=>{
+  event.preventDefault();
+  const button=event.submitter,feedback=$('#calendarNoteFeedback');
+  const before=editing;
+  const after={...(before||{}),id:before?.id||crypto.randomUUID(),date:day,staffName:$('#calendarStaffName').value.trim(),time:$('#calendarTime').value,text:$('#calendarNote').value.trim(),active:true};
+  if(!after.text){feedback.textContent='일정 내용을 입력해 주세요.';return}
+  button.disabled=true;
+  try{await save(after,before)}catch(error){feedback.textContent=error.message}finally{button.disabled=false}
+ };
+ document.querySelectorAll('[data-delete-calendar]').forEach(button=>button.onclick=()=>{
+  const note=management.data.calendarNotes.find(row=>row.id===button.dataset.deleteCalendar);
+  const before=JSON.parse(JSON.stringify(note));
+  modal('<h2>일정을 삭제할까요?</h2><p>'+esc(calendarEntryLabel(note))+'</p><p>'+esc(note.text)+'</p><p id="calendarDeleteError" role="alert"></p><button type="button" class="primary danger" id="confirmCalendarDelete">삭제</button>');
+  $('#confirmCalendarDelete').onclick=async event=>{
+   event.target.disabled=true;
+   try{await save({...before,active:false},before);$('#dialog').close()}catch(error){$('#calendarDeleteError').textContent=error.message;event.target.disabled=false}
+  };
+ });
+}
+
 dashboard=function(){const stats=analysisData(),todayAttendance=periodAttendanceData(date,date),todayPresent=people.filter(m=>records[date+':'+m.id]==='출석').length;
-return heading('우리의 하루를, 함께.','팀 운영 대시보드 · '+prettyDate,'<a class="primary" href="#attendance">오늘 출결 확인 ↗</a><button id="backupDashboard" class="secondary">운영 자료 백업</button>')+
+return heading('우리의 하루를, 함께.','팀 운영 대시보드 · '+prettyDate,'<a class="primary" href="#attendance">오늘 출결 확인 ↗</a><button id="backupDashboard" class="secondary">운영 자료 백업</button>')+dashboardCalendar()+
 '<section class="metrics">'+[['오늘 출석',todayPresent,'명'],['등록 참여자',people.length,'명'],['오늘 프로그램',management.schedulesOn(date).length,'개'],['오늘 참석률',todayAttendance.rate===null?'—':todayAttendance.rate,'%',todayAttendance.present+' / '+todayAttendance.expected+'명']].map(m=>'<div class="metric"><div class="metriclabel">'+m[0]+'</div><strong>'+m[1]+'<small>'+m[2]+'</small></strong>'+(m[3]?'<p class="metric-basis">'+m[3]+'</p>':'')+'</div>').join('')+'</section>'+
 '<div class="grid dashboard-operations-grid"><section class="panel today-program-panel"><div class="panelhead"><h2>오늘의 프로그램</h2><a class="textbutton" href="#timetable/staff">시간표 보기 ↗</a></div>'+dashboardProgramList()+'</section>'+periodAttendanceCard()+'</div>'+
 '<div class="insight-heading"><div><p class="eyebrow">ATTENDANCE INSIGHTS</p><h2>참여의 흐름을 한눈에.</h2></div><button id="exportAnalysis" class="secondary">↓ 참석률 CSV</button></div><section class="panel period-panel"><div class="analysis-filters"><label>시작일<input id="analysisFrom" type="date" value="'+analysisFrom+'" max="'+date+'"></label><label>종료일<input id="analysisTo" type="date" value="'+analysisTo+'" max="'+date+'"></label><label>대상 이름 검색<input id="targetSearch" type="search" placeholder="이름으로 검색" value="'+esc(targetSearch)+'"></label><label>대상 이름<select id="analysisTarget"><option value="">참여자를 선택해 주세요</option>'+opts(management.list('members').filter(m=>m.name.includes(targetSearch)),analysisMember)+'</select></label></div></section><div class="insights-grid">'+linkedAttendanceCharts(stats)+'</div>'+weekdayAttendanceTable(stats);
@@ -36,6 +105,7 @@ return heading('우리의 하루를, 함께.','팀 운영 대시보드 · '+pret
 const analysisBind=bindManagement;
 bindManagement=function(page){analysisBind(page);if(page!=='dashboard')return;bindPeriodAttendance();
  $('#backupDashboard').onclick=downloadTeamBackup;
+ bindDashboardCalendar();
 
  const refreshInsights=async()=>{const from=$('#analysisFrom').value,to=$('#analysisTo').value,id=$('#analysisTarget').value;if(!from||!to||from>to||to>date||dateSpan(from,to).length>=366){toast('오늘까지, 1년 이내의 날짜 범위를 선택해 주세요.');return}analysisFrom=from;analysisTo=to;analysisGroup='';analysisStaff='';analysisMember=id;try{for(const year of new Set(dateSpan(from,to).map(d=>d.slice(0,4))))await ensureHolidayYear(year);if(team.active)for(const month of new Set(dateSpan(from,to).map(d=>d.slice(0,7))))await loadTeamMonth(month);if(location.hash==='#dashboard')render()}catch(error){toast('자료를 불러오지 못했습니다. '+error.message)}};
  $('#analysisTarget').onchange=refreshInsights;$('#analysisFrom').onchange=refreshInsights;$('#analysisTo').onchange=refreshInsights;

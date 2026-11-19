@@ -406,3 +406,38 @@ test('공개 프로그램 출석은 배정된 일정 한 건만 저장하고 해
  assert.equal(post(input(parallel)).body.code,'ABSENCE_LOCKED');
  assert.deepEqual(state().programCheckins,{});
 });
+
+test('월간 메모는 기존 자료에 추가되며 관리자 간 충돌을 검사하고 공개 화면에서 숨긴다',()=>{
+ const e=environment();e.login();
+ e.call('/api/team/initialize',{management:e.model().data,records:{}});
+ const saved={id:'2026-11-19',text:'오후 회의\n준비물 확인'};
+ assert.equal(e.call('/api/team/config',{changes:[{type:'calendarNotes',id:saved.id,before:null,after:saved}]}).status,200);
+ assert.equal(e.call('/api/team/state',{},'GET').body.config.calendarNotes[0].text,saved.text);
+ const conflict=e.call('/api/team/config',{changes:[{type:'calendarNotes',id:saved.id,before:null,after:{...saved,text:'동시 수정'}}]});
+ assert.equal(conflict.status,409);
+ e.logout();e.login();
+ const shared=e.call('/api/team/state',{},'GET').body.config.calendarNotes[0];
+ assert.equal(shared.text,saved.text);
+ const edited={...shared,text:shared.text+'\n다른 직원이 추가한 일정'};
+ assert.equal(e.call('/api/team/config',{changes:[{type:'calendarNotes',id:shared.id,before:shared,after:edited}]}).status,200);
+ assert.equal(e.call('/api/team/state',{},'GET').body.config.calendarNotes[0].text,edited.text);
+ assert.equal(e.call('/api/team/config',{changes:[{type:'calendarNotes',id:'2026-02-30',before:null,after:{id:'2026-02-30',text:'잘못된 날짜'}}]}).status,500);
+ e.logout();
+ assert.equal(e.call('/api/team/state',{},'GET').body.config.calendarNotes,undefined);
+ assert.equal(e.call('/api/team/config',{changes:[]}).status,401);
+});
+
+test('여러 직원이 같은 날짜에 일정을 각각 추가하고 개별 수정·삭제한다',()=>{
+ const e=environment();e.login();e.call('/api/team/initialize',{management:e.model().data,records:{}});
+ const first={id:crypto.randomUUID(),date:'2026-11-19',staffName:'직원 가',time:'10:00',text:'회의',active:true};
+ const second={id:crypto.randomUUID(),date:'2026-11-19',staffName:'직원 나',time:'14:00',text:'외부 방문',active:true};
+ const write=(after,before=null)=>e.call('/api/team/config',{changes:[{type:'calendarNotes',id:after.id,before,after}]});
+ assert.equal(write(first).status,200);e.logout();e.login();assert.equal(write(second).status,200);
+ const changed={...first,text:'회의 장소 변경'};
+ assert.equal(write(changed,first).status,200);
+ assert.equal(write({...first,text:'오래된 수정'},first).status,409);
+ assert.equal(write({...second,active:false},second).status,200);
+ const notes=e.call('/api/team/state',{},'GET').body.config.calendarNotes;
+ assert.equal(notes.length,2);assert.equal(notes.find(row=>row.id===first.id).text,changed.text);
+ assert.equal(notes.find(row=>row.id===second.id).active,false);
+});

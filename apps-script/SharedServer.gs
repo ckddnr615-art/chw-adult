@@ -1,5 +1,5 @@
 /* Google shared-storage backend. No Cloudflare Worker, D1, API key in the browser. */
-var SHARED_TYPES_=['communities','members','areas','programs','schedules','staff','caseAssignments','enrollments','scheduleOverrides','closures','banners'];
+var SHARED_TYPES_=['communities','members','areas','programs','schedules','staff','caseAssignments','enrollments','scheduleOverrides','closures','banners','calendarNotes'];
 var SHARED_META_='__CH_APP_META';
 function sharedProps_(){return PropertiesService.getScriptProperties()}
 function sharedToday_(){return Utilities.formatDate(new Date(),'Asia/Seoul','yyyy-MM-dd')}
@@ -214,7 +214,7 @@ function sharedRpc(request,origin,channel){
   var staff=staffId&&config?(config.staff||[]).find(function(person){return person.id===staffId&&person.active!==false}):null;
   if(staffId&&!staff)admin=false;
   var actor=staff?staff.name:admin?'공용 관리자':'참여자 출석';
-  if(path==='/api/team/status')return sharedReply_({service:'ch-team-api',configured:true,initialized:manifest.initialized,authenticated:admin,staffId:staff?staff.id:'',googleConfigured:sharedReportsConfigured_(),participationPeriods:true,programCheckin:true,local:false,backend:'google'});
+  if(path==='/api/team/status')return sharedReply_({service:'ch-team-api',configured:true,initialized:manifest.initialized,authenticated:admin,staffId:staff?staff.id:'',googleConfigured:sharedReportsConfigured_(),participationPeriods:true,programCheckin:true,calendarNotes:true,calendarEntries:true,local:false,backend:'google'});
   if(path==='/api/integration-status')return sharedReply_({service:'ch-performance-api',configured:sharedReportsConfigured_(),authenticated:admin});
   if(path.startsWith('/api/team/photos/')||path==='/api/team/photo')return sharedPhoto_(book,request,admin);
   if(path==='/api/team/state'){
@@ -222,7 +222,7 @@ function sharedRpc(request,origin,channel){
    if(Number(params.since||0)===manifest.revision)return sharedReply_({initialized:true,unchanged:true,revision:manifest.revision});
    var month=sharedMonth_(book,manifest,monthKey),visibleConfig=JSON.parse(JSON.stringify(config));
    delete visibleConfig.configAudit;
-   if(!admin){visibleConfig.members=visibleConfig.members.filter(function(m){return m.active!==false}).map(function(m){return {id:m.id,name:m.name,communityId:m.communityId,active:true,history:[{from:'1900-01-01',communityId:m.communityId}],photo:m.photo||null}});visibleConfig.staff=[];visibleConfig.caseAssignments=[]}
+   if(!admin){visibleConfig.members=visibleConfig.members.filter(function(m){return m.active!==false}).map(function(m){return {id:m.id,name:m.name,communityId:m.communityId,active:true,history:[{from:'1900-01-01',communityId:m.communityId}],photo:m.photo||null}});visibleConfig.staff=[];visibleConfig.caseAssignments=[];delete visibleConfig.calendarNotes}
    var publicRecords={},publicDays={};Object.keys(month.records).forEach(function(key){if(admin||key.startsWith(today+':')){publicRecords[key]=month.records[key];publicDays[key]=month.days[key]}});
    return sharedReply_({initialized:true,revision:manifest.revision,config:visibleConfig,records:publicRecords,days:publicDays,programCheckins:monthKey===today.slice(0,7)?sharedProgramCheckins_(month,today):undefined,entries:admin?month.entries:[],audit:admin?(config.configAudit||[]).concat(month.audit||[]):[]});
   }
@@ -304,7 +304,7 @@ function sharedRpc(request,origin,channel){
   }
   if(path==='/api/team/config'&&request.method==='POST'){
    if(!config)throw Error('운영 자료를 먼저 초기화해 주세요.');if(!Array.isArray(input.changes)||input.changes.length>2000)throw Error('변경 자료 오류');var next=JSON.parse(JSON.stringify(config)),appliedChanges=[];
-   for(var change of input.changes){if(!SHARED_TYPES_.includes(change.type)||!change.after||change.after.id!==change.id)throw Error('항목 형식 오류');var rows=next[change.type],index=rows.findIndex(function(r){return r.id===change.id}),actual=index>=0?rows[index]:null;
+   for(var change of input.changes){if(!SHARED_TYPES_.includes(change.type)||!change.after||change.after.id!==change.id)throw Error('항목 형식 오류');var rows=next[change.type]||(next[change.type]=[]),index=rows.findIndex(function(r){return r.id===change.id}),actual=index>=0?rows[index]:null;
     if(sharedComparable_(actual)===sharedComparable_(change.after))continue;
     if(sharedComparable_(actual)!==sharedComparable_(change.before||null))return sharedReply_({error:'다른 직원이 이 항목을 먼저 수정했습니다. 변경 내용을 비교해 주세요.',conflict:{type:change.type,id:change.id,current:actual}},409);
     if(index>=0)rows[index]=change.after;else rows.push(change.after);appliedChanges.push(change);
@@ -322,7 +322,7 @@ function sharedRpc(request,origin,channel){
      before:change.before?{name:change.before.name||change.before.reason||'',date:change.before.date||'',start:change.before.start||'',end:change.before.end||''}:null,
      after:{name:change.after.name||change.after.reason||'',date:change.after.date||'',start:change.after.start||'',end:change.after.end||''}};
    })).slice(-150);
-   next.closures.forEach(ManagementStore.validateClosure);next.banners.forEach(ManagementStore.validateBanner);if(JSON.stringify(next).length>950000)throw Error('기초 자료 용량 초과');sharedSyncReportTabNames_(book,appliedChanges);manifest.config=sharedWrite_(book,'CONFIG',manifest.config,next);
+   (next.calendarNotes||[]).forEach(ManagementStore.validateCalendarNote);next.closures.forEach(ManagementStore.validateClosure);next.banners.forEach(ManagementStore.validateBanner);if(JSON.stringify(next).length>950000)throw Error('기초 자료 용량 초과');sharedSyncReportTabNames_(book,appliedChanges);manifest.config=sharedWrite_(book,'CONFIG',manifest.config,next);
    var affected=sharedChangedDates_(appliedChanges),remaining=0;
    if(affected.active)Object.keys(manifest.months).forEach(function(key){var month=sharedMonth_(book,manifest,key),queue=new Set(month.reconcile);Object.keys(month.records).forEach(function(day){if(month.records[day]==='출석'&&affected(day.slice(0,10)))queue.add(day)});month.reconcile=[...queue];remaining+=month.reconcile.length;sharedSaveMonth_(book,manifest,key,month)});
    sharedCommit_(book,manifest);return sharedReply_({ok:true,reconcile:remaining>0});

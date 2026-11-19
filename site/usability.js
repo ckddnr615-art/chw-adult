@@ -35,7 +35,7 @@ function kioskProgramChoices(schedules,period){
  return `${tabs}<div id="kioskPeriodPrograms">${items.length?`<div class="kiosk-program-grid">${items.map(schedule=>{
    const {members,present}=publicProgramRoster(schedule,schedules);
    const key=kioskProgramKey(schedule),index=[...schedule.program.id].reduce((n,c)=>(31*n+c.charCodeAt(0))%AFFILIATION_SHAPES.length,0);
-   return `<button class="kiosk-program-card" type="button" data-kiosk-program="${esc(key)}" aria-pressed="${key===kioskScheduleKey}"><span class="communityicon ${['green','blue','orange','purple'][index%4]}">${groupIcon(index,AFFILIATION_SHAPES[index][0])}</span><span><strong>${esc(schedule.program.name)}</strong><small>${esc(schedule.start)} ~ ${esc(schedule.end)} · ${esc(schedule.location||'장소 미정')}</small><span class="kiosk-program-count">총원 ${members.length}명 / 출석 ${present.length}명</span></span></button>`;
+   return `<button class="kiosk-program-card" type="button" data-kiosk-program="${esc(key)}" aria-pressed="${key===kioskScheduleKey}" aria-expanded="${key===kioskScheduleKey}"><span class="communityicon ${['green','blue','orange','purple'][index%4]}">${groupIcon(index,AFFILIATION_SHAPES[index][0])}</span><span><strong>${esc(schedule.program.name)}</strong><small>${esc(schedule.start)} ~ ${esc(schedule.end)} · ${esc(schedule.location||'장소 미정')}</small><span class="kiosk-program-count">총원 ${members.length}명 / 출석 ${present.length}명</span></span></button>`;
  }).join('')}</div>`:'<p>이 시간대에는 프로그램이 없어요.</p>'}</div>`;
 }
 function kioskProgramSummary(schedule){
@@ -143,7 +143,14 @@ bindManagement=function(page){
   say(button.textContent.trim()+' 프로그램이에요.');
  });
  document.querySelectorAll('[data-kiosk-program]').forEach(button=>button.onclick=()=>{
-  kioskScheduleKey=button.dataset.kioskProgram;render();
+  const key=button.dataset.kioskProgram;
+  kioskScheduleKey=kioskScheduleKey===key?'':key;
+  render();
+  if(!kioskScheduleKey){
+   [...document.querySelectorAll('[data-kiosk-program]')].find(item=>item.dataset.kioskProgram===key)?.focus({preventScroll:true});
+   say('프로그램 명단을 접었어요.');
+   return;
+  }
   const schedule=selectedKioskProgram();
   if(!schedule)return;
   const roster=publicProgramRoster(schedule);
