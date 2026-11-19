@@ -48,24 +48,27 @@ function replaceKioskDialog(content){
  else modal(content);
  $('#closeDialog').textContent='닫기';
 }
-function showKioskPhotoPicker(schedule,page=0){
- const members=(schedule?publicProgramRoster(schedule).members:management.list('members')).slice().sort((a,b)=>a.name.localeCompare(b.name,'ko'));
+function showKioskPhotoPicker(schedule,page=0,communityId=''){
+ const members=(schedule?publicProgramRoster(schedule).members:management.list('members').filter(member=>!communityId||management.memberGroupAt(member,date)===communityId)).slice().sort((a,b)=>a.name.localeCompare(b.name,'ko'));
  const pageSize=12,start=page*pageSize;
- replaceKioskDialog(`<h2 id="kioskPhotoTitle" tabindex="-1">내 사진을 눌러 주세요</h2>${schedule?'<p>'+esc(schedule.program.name)+'</p>':''}<div class="kiosk-photo-grid">${members.slice(start,start+pageSize).map(member=>`<div class="kiosk-photo-option"><button type="button" class="personcard" data-kiosk-person="${esc(member.id)}">${photoMarkup(member)}<b>${esc(member.name)}</b></button><button type="button" class="secondary" aria-label="${esc(member.name)} 이름 듣기" data-kiosk-read="${esc(member.name)}">🔊</button></div>`).join('')||'<p>오늘 등록된 참여자가 없어요.</p>'}</div>${members.length>pageSize?`<div class="kiosk-photo-pages"><button type="button" class="secondary" id="previousPhotos" ${page===0?'disabled':''}>← 이전 사진</button><button type="button" class="secondary" id="nextPhotos" ${start+pageSize>=members.length?'disabled':''}>다음 사진 →</button></div>`:''}`);
+ replaceKioskDialog(`<h2 id="kioskPhotoTitle" tabindex="-1">내 사진을 눌러 주세요</h2>${schedule?'<p>'+esc(schedule.program.name)+'</p>':communityId?'<p>'+esc(management.communityName(communityId))+'</p>':''}<div class="kiosk-photo-grid">${members.slice(start,start+pageSize).map(member=>`<div class="kiosk-photo-option"><button type="button" class="personcard" data-kiosk-person="${esc(member.id)}">${photoMarkup(member)}<b>${esc(member.name)}</b></button><button type="button" class="secondary" aria-label="${esc(member.name)} 이름 듣기" data-kiosk-read="${esc(member.name)}">🔊</button></div>`).join('')||'<p>오늘 등록된 참여자가 없어요.</p>'}</div>${members.length>pageSize?`<div class="kiosk-photo-pages"><button type="button" class="secondary" id="previousPhotos" ${page===0?'disabled':''}>← 이전 사진</button><button type="button" class="secondary" id="nextPhotos" ${start+pageSize>=members.length?'disabled':''}>다음 사진 →</button></div>`:''}`);
  $('#kioskPhotoTitle').focus();
- $('#dialogcontent').querySelectorAll('[data-kiosk-person]').forEach(button=>button.onclick=()=>openPublicCheckin(button.dataset.kioskPerson,schedule));
+ $('#dialogcontent').querySelectorAll('[data-kiosk-person]').forEach(button=>button.onclick=()=>openPublicCheckin(button.dataset.kioskPerson,schedule,communityId));
  $('#dialogcontent').querySelectorAll('[data-kiosk-read]').forEach(button=>button.onclick=()=>say(button.dataset.kioskRead,true));
- if($('#previousPhotos'))$('#previousPhotos').onclick=()=>{showKioskPhotoPicker(schedule,page-1);say('이전 사진이에요.')};
- if($('#nextPhotos'))$('#nextPhotos').onclick=()=>{showKioskPhotoPicker(schedule,page+1);say('다음 사진이에요.')};
+ if($('#previousPhotos'))$('#previousPhotos').onclick=()=>{showKioskPhotoPicker(schedule,page-1,communityId);say('이전 사진이에요.')};
+ if($('#nextPhotos'))$('#nextPhotos').onclick=()=>{showKioskPhotoPicker(schedule,page+1,communityId);say('다음 사진이에요.')};
  void hydratePhotos();
 }
-function openPublicCheckin(id,requestedSchedule){
+function openPublicCheckin(id,requestedSchedule,communityId=''){
  const member=management.find('members',id);
  if(!team.active||!team.programCheckin||!member||member.active===false)return;
  if(status(member)==='결석'){showAbsenceNotice();return}
  const assigned=management.personalSchedules(id,date);
  const schedule=requestedSchedule||photoFirstSchedule(assigned,kioskTime.format(new Date()));
- const agenda=!requestedSchedule&&assigned.length?'<details class="kiosk-person-agenda"><summary>오늘 내 프로그램 보기</summary><ul>'+assigned.map(item=>'<li><strong>'+esc(item.program.name)+'</strong><span>'+esc(item.start)+' ~ '+esc(item.end)+' · '+esc(item.location||'장소 미정')+'</span></li>').join('')+'</ul></details>':'';
+ const agenda=assigned.length?'<section class="kiosk-person-agenda" aria-label="오늘 내 프로그램"><h3>오늘 내 프로그램</h3><ul>'+assigned.map(item=>{
+  const checked=(kioskProgramCheckins[kioskProgramKey(item)]||[]).includes(id)&&status(member)==='출석';
+  return '<li><button type="button" class="secondary" data-person-schedule="'+esc(kioskProgramKey(item))+'"><strong>'+esc(item.program.name)+'</strong><span>'+esc(item.start)+' ~ '+esc(item.end)+' · '+esc(item.location||'장소 미정')+'</span><span>'+(checked?'✓ 출석했어요':'출석 확인하기 →')+'</span></button></li>';
+ }).join('')+'</ul></section>':'<p>오늘 배정된 프로그램이 없어요. 직원에게 알려 주세요.</p>';
  const key=schedule&&kioskProgramKey(schedule);
  const completed=key&&(kioskProgramCheckins[key]||[]).includes(id)&&status(member)==='출석';
  const instruction=!schedule?'지금 출석할 프로그램을 확인하기 어려워요. 가까운 직원에게 알려 주세요.':completed?'이 프로그램은 이미 출석했어요.':'내 사진이 맞으면 초록색 출석 버튼을 눌러 주세요.';
@@ -75,7 +78,11 @@ function openPublicCheckin(id,requestedSchedule){
  say(spoken);
  $('#kioskReadConfirm').onclick=()=>say(spoken,true);
  if($('#kioskAskStaff'))$('#kioskAskStaff').onclick=()=>say(member.name+' 님의 프로그램 출석 확인을 도와주세요.',true);
- $('#kioskBackToPhotos').onclick=()=>showKioskPhotoPicker(requestedSchedule);
+ $('#kioskBackToPhotos').onclick=()=>showKioskPhotoPicker(requestedSchedule,0,communityId);
+ $('#dialogcontent').querySelectorAll('[data-person-schedule]').forEach(button=>button.onclick=()=>{
+  const item=assigned.find(row=>kioskProgramKey(row)===button.dataset.personSchedule);
+  if(item)openPublicCheckin(id,item,communityId);
+ });
  const confirm=$('#confirmProgramCheckin');
  if(!confirm)return;
  confirm.onclick=async()=>{
@@ -98,7 +105,7 @@ function openPublicCheckin(id,requestedSchedule){
    if(!isCurrent())return;
    if(error.code==='ABSENCE_LOCKED'){showAbsenceNotice();return}
    replaceKioskDialog('<h2>출석을 확인해 주세요</h2><p>'+esc(error.message)+'</p><button type="button" class="secondary" id="kioskRetry">다시 확인</button>');
-   $('#kioskRetry').onclick=()=>openPublicCheckin(id,requestedSchedule);
+   $('#kioskRetry').onclick=()=>openPublicCheckin(id,requestedSchedule,communityId);
    say(error.message);
   }
  };
@@ -121,6 +128,12 @@ function bindParticipantSearch(){
  };
  search.oninput=paint;paint();
 }
+function kioskAffiliationChoices(){
+ const groups=management.kioskAffiliations();
+ return '<section class="kiosk-affiliation-entry" aria-labelledby="kioskAffiliationTitle"><h2 id="kioskAffiliationTitle">소속으로 출석 찾기</h2><div class="kiosk-program-grid">'+groups.map((community,index)=>
+  '<button type="button" class="kiosk-program-card" data-kiosk-affiliation="'+esc(community.id)+'"><span class="communityicon '+['green','blue','orange','purple'][index%4]+'">'+groupIcon(index,community.shape)+'</span><strong>'+esc(community.name)+'</strong></button>'
+ ).join('')+'</div></section>';
+}
 kiosk=function(){
  const closed=management.holidayName(date),holidayPending=!holidayYears.has(date.slice(0,4));
  const ready=team.active&&team.programCheckin&&!holidayPending&&!closed;
@@ -128,7 +141,7 @@ kiosk=function(){
  const selected=ready?selectedKioskProgram():null;
  const schedule=selected&&ManagementStore.scheduleSlot(selected)===period?selected:null;
  const message=team.error?'공동 저장을 연결하려면 직원에게 알려 주세요.':closed?`오늘은 ${esc(closed)}입니다.`:team.active&&!team.programCheckin?'프로그램 출석을 사용하려면 직원이 서버를 업데이트해야 해요.':!ready?'오늘 프로그램을 확인하고 있어요.':management.afternoonClosed(date)?'오늘은 오후 프로그램이 없어요.':'';
- return `<div class="kiosk-flow"><div class="welcome-line"><span>성인지원팀 · 출석하기</span>${clockMarkup()}</div>${message?`<p class="public-service-notice" role="status">${message}</p>`:''}<div class="compact-welcome">${bannerMarkup('kiosk')}</div>${ready?`<section class="kiosk-photo-entry"><button type="button" class="primary" id="startPhotoCheckin"><span aria-hidden="true">▣</span> 내 사진으로 출석</button><button type="button" class="secondary" id="kioskReadHelp">🔊 방법 듣기</button></section><details class="participant-search" ${participantSearchQuery?'open':''}><summary>이름으로 찾기</summary><label for="participantSearch">참여자 이름</label><input type="search" id="participantSearch" autocomplete="off" value="${esc(participantSearchQuery)}"><div id="participantSearchResults" class="participant-search-results"></div></details><section class="kiosk-program-section"><h2>오늘 프로그램</h2>${kioskProgramChoices(schedules,period)}${schedule?kioskProgramSummary(schedule):''}</section>`:''}<div class="bottomhelp"><button id="askStaff" class="secondary">직원에게 도움 요청하기</button></div></div>`;
+ return `<div class="kiosk-flow"><div class="welcome-line"><span>성인지원팀 · 출석하기</span>${clockMarkup()}</div>${message?`<p class="public-service-notice" role="status">${message}</p>`:''}<div class="compact-welcome">${bannerMarkup('kiosk')}</div>${ready?`<section class="kiosk-photo-entry"><button type="button" class="primary" id="startPhotoCheckin"><span aria-hidden="true">▣</span> 내 사진으로 출석</button><button type="button" class="secondary" id="kioskReadHelp">🔊 방법 듣기</button></section><details class="participant-search" ${participantSearchQuery?'open':''}><summary>이름으로 찾기</summary><label for="participantSearch">참여자 이름</label><input type="search" id="participantSearch" autocomplete="off" value="${esc(participantSearchQuery)}"><div id="participantSearchResults" class="participant-search-results"></div></details><section class="kiosk-program-section"><h2>오늘 프로그램</h2>${kioskProgramChoices(schedules,period)}${schedule?kioskProgramSummary(schedule):''}</section>${kioskAffiliationChoices()}`:''}<div class="bottomhelp"><button id="askStaff" class="secondary">직원에게 도움 요청하기</button></div></div>`;
 };
 const previousPickerBind=bindManagement;
 bindManagement=function(page){
@@ -137,6 +150,10 @@ bindManagement=function(page){
  $('#startPhotoCheckin').onclick=()=>{showKioskPhotoPicker();say('내 사진을 눌러 주세요.')};
  $('#kioskReadHelp').onclick=()=>say('내 사진으로 출석 버튼을 누르고, 내 사진을 골라 주세요. 직원에게 도움을 요청해도 돼요.',true);
  bindParticipantSearch();
+ document.querySelectorAll('[data-kiosk-affiliation]').forEach(button=>button.onclick=()=>{
+  showKioskPhotoPicker(undefined,0,button.dataset.kioskAffiliation);
+  say(management.communityName(button.dataset.kioskAffiliation)+'. 내 사진을 눌러 주세요.');
+ });
  document.querySelectorAll('[data-kiosk-period]').forEach(button=>button.onclick=()=>{
   kioskPeriod=button.dataset.kioskPeriod;kioskScheduleKey='';render();
   $('[data-kiosk-period="'+kioskPeriod+'"]')?.focus({preventScroll:true});
