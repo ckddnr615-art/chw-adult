@@ -1,5 +1,5 @@
 /* The kiosk offers photo-first check-in and a program-by-program roster. */
-let participantSearchQuery='',kioskScheduleKey='',kioskPeriod='';
+let participantSearchQuery='',participantSearchOpen=false,kioskScheduleKey='',kioskPeriod='';
 const kioskTime=new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Seoul',hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
 function kioskProgramKey(schedule){return ManagementStore.programAttendanceKey(schedule.id,schedule.program.id)}
 function photoFirstSchedule(items,time){
@@ -130,7 +130,7 @@ function bindParticipantSearch(){
 }
 function kioskAffiliationChoices(){
  const groups=management.kioskAffiliations();
- return '<section class="kiosk-affiliation-entry" aria-labelledby="kioskAffiliationTitle"><h2 id="kioskAffiliationTitle">소속으로 출석 찾기</h2><div class="kiosk-program-grid">'+groups.map((community,index)=>
+ return '<section class="kiosk-affiliation-entry" aria-labelledby="kioskAffiliationTitle"><h2 id="kioskAffiliationTitle">내 대기실에서 찾기</h2><p class="kiosk-waiting-room-help">활동 전후에 기다리는 곳을 골라 주세요.</p><div class="kiosk-program-grid">'+groups.map((community,index)=>
   '<button type="button" class="kiosk-program-card" data-kiosk-affiliation="'+esc(community.id)+'"><span class="communityicon '+['green','blue','orange','purple'][index%4]+'">'+groupIcon(index,community.shape)+'</span><strong>'+esc(community.name)+'</strong></button>'
  ).join('')+'</div></section>';
 }
@@ -141,14 +141,19 @@ kiosk=function(){
  const selected=ready?selectedKioskProgram():null;
  const schedule=selected&&ManagementStore.scheduleSlot(selected)===period?selected:null;
  const message=team.error?'공동 저장을 연결하려면 직원에게 알려 주세요.':closed?`오늘은 ${esc(closed)}입니다.`:team.active&&!team.programCheckin?'프로그램 출석을 사용하려면 직원이 서버를 업데이트해야 해요.':!ready?'오늘 프로그램을 확인하고 있어요.':management.afternoonClosed(date)?'오늘은 오후 프로그램이 없어요.':'';
- return `<div class="kiosk-flow"><div class="welcome-line"><span>성인지원팀 · 출석하기</span>${clockMarkup()}</div>${message?`<p class="public-service-notice" role="status">${message}</p>`:''}<div class="compact-welcome">${bannerMarkup('kiosk')}</div>${ready?`<section class="kiosk-photo-entry"><button type="button" class="primary" id="startPhotoCheckin"><span aria-hidden="true">▣</span> 내 사진으로 출석</button><button type="button" class="secondary" id="kioskReadHelp">🔊 방법 듣기</button></section><details class="participant-search" ${participantSearchQuery?'open':''}><summary>이름으로 찾기</summary><label for="participantSearch">참여자 이름</label><input type="search" id="participantSearch" autocomplete="off" value="${esc(participantSearchQuery)}"><div id="participantSearchResults" class="participant-search-results"></div></details><section class="kiosk-program-section"><h2>오늘 프로그램</h2>${kioskProgramChoices(schedules,period)}${schedule?kioskProgramSummary(schedule):''}</section>${kioskAffiliationChoices()}`:''}<div class="bottomhelp"><button id="askStaff" class="secondary">직원에게 도움 요청하기</button></div></div>`;
+ return `<div class="kiosk-flow"><div class="welcome-line"><span>성인지원팀 · 출석하기</span>${clockMarkup()}</div>${message?`<p class="public-service-notice" role="status">${message}</p>`:''}<div class="compact-welcome">${bannerMarkup('kiosk')}</div>${ready?`<section class="kiosk-photo-entry"><button type="button" class="primary" id="startNameSearch" aria-controls="participantSearchPanel" aria-expanded="${participantSearchOpen}">이름으로 찾기</button><button type="button" class="secondary" id="kioskReadHelp">🔊 방법 듣기</button></section><section class="participant-search" id="participantSearchPanel" ${participantSearchOpen?'':'hidden'}><label for="participantSearch">참여자 이름</label><input type="search" id="participantSearch" autocomplete="off" value="${esc(participantSearchQuery)}"><div id="participantSearchResults" class="participant-search-results"></div></section><section class="kiosk-program-section"><h2>오늘 프로그램</h2>${kioskProgramChoices(schedules,period)}${schedule?kioskProgramSummary(schedule):''}</section>${kioskAffiliationChoices()}`:''}<div class="bottomhelp"><button id="askStaff" class="secondary">직원에게 도움 요청하기</button></div></div>`;
 };
 const previousPickerBind=bindManagement;
 bindManagement=function(page){
  previousPickerBind(page);
- if(page!=='kiosk'||!$('#startPhotoCheckin'))return;
- $('#startPhotoCheckin').onclick=()=>{showKioskPhotoPicker();say('내 사진을 눌러 주세요.')};
- $('#kioskReadHelp').onclick=()=>say('내 사진으로 출석 버튼을 누르고, 내 사진을 골라 주세요. 직원에게 도움을 요청해도 돼요.',true);
+ if(page!=='kiosk'||!$('#startNameSearch'))return;
+ $('#startNameSearch').onclick=()=>{
+  participantSearchOpen=!participantSearchOpen;
+  $('#participantSearchPanel').hidden=!participantSearchOpen;
+  $('#startNameSearch').setAttribute('aria-expanded',String(participantSearchOpen));
+  if(participantSearchOpen){$('#participantSearch').focus();say('이름을 입력해 주세요.')}
+ };
+ $('#kioskReadHelp').onclick=()=>say('이름으로 찾기를 누르거나, 아래에서 활동 전후에 기다리는 대기실을 골라 내 사진을 눌러 주세요.',true);
  bindParticipantSearch();
  document.querySelectorAll('[data-kiosk-affiliation]').forEach(button=>button.onclick=()=>{
   showKioskPhotoPicker(undefined,0,button.dataset.kioskAffiliation);

@@ -105,7 +105,7 @@ body:not(.participant-mode) dialog:has(.program-registration-form){width:780px;m
 @media(max-width:520px){.kiosk-day-schedule{padding:14px;margin-bottom:22px}}
 .kiosk-photo-entry{display:flex;flex-wrap:wrap;align-items:stretch;gap:10px;margin:18px 0 10px}
 .kiosk-photo-entry button{min-height:52px;font-size:17px}
-.kiosk-photo-entry #startPhotoCheckin{min-height:64px;padding:12px 22px;font-size:21px;background:#28684d;color:#fff}
+.kiosk-photo-entry #startNameSearch{min-height:64px;padding:12px 22px;font-size:21px;background:#28684d;color:#fff}
 .kiosk-flow details.participant-search{margin:8px 0 22px}
 .kiosk-flow details.participant-search summary{cursor:pointer;padding:8px 0;font-size:16px;color:#2d507d;font-weight:700}
 .kiosk-flow details.participant-search label{margin-top:8px}
@@ -155,3 +155,5 @@ body.participant-mode dialog:has(.kiosk-photo-grid){width:min(720px,calc(100% - 
 .kiosk-person-agenda h3{font-size:18px;margin:12px 0 6px}
 .kiosk-person-agenda button{width:100%;text-align:left;min-height:64px;padding:10px 12px;line-height:1.5;overflow-wrap:anywhere}
 .kiosk-person-agenda button>span:last-child{color:#28684d;font-weight:700;margin-top:4px}
+
+.kiosk-affiliation-entry .kiosk-waiting-room-help{font-size:17px;color:#475b72;line-height:1.6;margin:0 0 12px}
