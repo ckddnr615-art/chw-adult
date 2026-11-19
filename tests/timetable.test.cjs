@@ -112,3 +112,14 @@ test('오전과 오후 탭은 선택한 시간의 일정만 표시하며 종일�
  assert.match(choose(schedules,'all-day'),/종일 체험/);
  assert.doesNotMatch(choose(schedules.slice(0,2),'morning'),/data-kiosk-period="all-day"/);
 });
+
+test('요일별 실적 담당은 반복 변경 적용일과 당일 대체 담당을 따른다',()=>{
+ const store=fixture(),first=store.list('staff')[0],second=store.list('staff')[1];
+ const ids=[first.id,second.id];
+ store.save('schedules','schedule-1',{facilitatorIds:ids,reportStaffByWeekday:{1:first.id,2:second.id}},'2026-11-16');
+ assert.equal(store.schedulesOn('2026-11-16').find(s=>s.id==='schedule-1').reportStaffId,first.id);
+ assert.equal(store.schedulesOn('2026-11-17').find(s=>s.id==='schedule-1').reportStaffId,second.id);
+ store.setDayOverride('schedule-1','2026-11-16',replacement(store,{facilitatorIds:ids,reportStaffId:second.id}));
+ assert.equal(store.schedulesOn('2026-11-16').find(s=>s.id==='schedule-1').reportStaffId,second.id);
+ assert.throws(()=>store.save('schedules','schedule-1',{reportStaffByWeekday:{1:'unknown-staff'}},'2026-11-16'),/요일별 담당자/);
+});

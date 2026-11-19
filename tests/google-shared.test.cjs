@@ -355,7 +355,7 @@ test('오전·오후 출석을 합산하고 같은 영역의 다른 프로그램
  const secondCheck=e.call('/api/team/checkin',pm);
  assert.equal(secondCheck.status,200);assert.equal(secondCheck.body.participation,'both');assert.equal(secondCheck.body.reportReceipt.synced,2);
  assert.equal(e.call('/api/team/checkin',am).body.participation,'both');
- const sheet=e.sheets.get('검증 실적');
+ const sheet=e.sheets.get(staff.name+' 실적');
  assert.equal(sheet.rows[0][7],'프로그램명');
  assert.equal(sheet.rows.slice(1).filter(r=>r[0]).map(r=>r[7]).sort().join('|'),[model.find('programs',programId).name,other.name].sort().join('|'));
  const state=()=>e.call('/api/team/state?month=2026-11',{},'GET').body;
@@ -440,4 +440,33 @@ test('여러 직원이 같은 날짜에 일정을 각각 추가하고 개별 수
  const notes=e.call('/api/team/state',{},'GET').body.config.calendarNotes;
  assert.equal(notes.length,2);assert.equal(notes.find(row=>row.id===first.id).text,changed.text);
  assert.equal(notes.find(row=>row.id===second.id).active,false);
+});
+
+test('같은 프로그램도 요일별 담당 한 직원의 탭에만 기록하고 미지정이면 대기한다',()=>{
+ const e=environment(),model=e.model(),first=model.data.staff[0];
+ const second=model.save('staff','',{name:'금요일 담당 직원'},'2026-11-19'),caseManager=model.save('staff','',{name:'사례관리 전용 직원'},'2026-11-19');
+ model.save('programs','program-1',{facilitatorIds:[first.id,second.id]},'2026-11-19');
+ model.save('schedules','schedule-1',{facilitatorIds:[first.id,second.id],reportStaffByWeekday:{4:first.id,5:second.id}},'2026-11-19');
+ model.assignCaseManager('person-1',caseManager.id,'2026-11-19');
+ e.props.set('SHEET_TAB_MAP','{}');e.login();e.call('/api/team/initialize',{management:model.data,records:{}});
+ const input=day=>({date:day,memberId:'person-1',scheduleId:'schedule-1',programId:'program-1',requestId:crypto.randomUUID()});
+ e.context.Utilities.formatDate=()=> '2026-11-19';
+ const firstCheck=input('2026-11-19');
+ assert.equal(e.call('/api/team/checkin',firstCheck).body.reportReceipt.synced,1);
+ assert.equal(e.call('/api/team/checkin',firstCheck).body.replayed,true);
+ assert.equal(e.sheets.has(second.name+' 실적'),false);
+ e.context.Utilities.formatDate=()=> '2026-11-20';
+ assert.equal(e.call('/api/team/checkin',input('2026-11-20')).body.reportReceipt.synced,1);
+ const a=e.sheets.get(first.name+' 실적'),b=e.sheets.get(second.name+' 실적');
+ assert.equal(a.getLastRow(),2);assert.equal(b.getLastRow(),2);
+ assert.equal(a.rows[1][6],'2026-11-19');assert.equal(b.rows[1][6],'2026-11-20');
+ assert.equal(a.rows[1][11],first.name);assert.equal(b.rows[1][11],second.name);
+ assert.equal(e.sheets.has(caseManager.name+' 실적'),false);
+ assert.equal(e.sheets.has('검증 실적'),false);
+ e.context.Utilities.formatDate=()=> '2026-11-23';
+ const pending=e.call('/api/team/checkin',input('2026-11-23'));
+ assert.equal(pending.body.reportReceipt.failed,1);assert.equal(pending.body.reportReceipt.mappingMissing,true);
+ assert.equal(a.getLastRow(),2);assert.equal(b.getLastRow(),2);
+ const cancel=e.call('/api/team/attendance',{date:'2026-11-19',memberId:'person-1',status:'결석',requestId:crypto.randomUUID()});
+ assert.equal(cancel.body.reportReceipt.failed,0);assert.equal(a.rows[1][0],'');assert.equal(b.rows[1][0],'검증 이용인');
 });

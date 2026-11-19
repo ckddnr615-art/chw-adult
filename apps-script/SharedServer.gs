@@ -77,13 +77,13 @@ function sharedHolidays_(year){
 function sharedQueueReports_(month,memberId,date){
  var sources=month.entries.filter(function(e){return e.memberId===memberId&&e.date===date});
  PerformanceProjection.aggregate(sources).forEach(function(report){
-  var id=(report.reportMode==='program'?'program-':'area-')+sharedHash_(report.reportKey),old=month.reports[id],signature=JSON.stringify([report.name,report.date,PerformanceProjection.label(report),report.staff,report.communityId,report.community,report.checked]);
+  var id=(report.reportMode==='program'?'program-':'area-')+sharedHash_(report.reportKey),old=month.reports[id],signature=JSON.stringify([report.name,report.date,PerformanceProjection.label(report),report.staff,report.communityId,report.community,report.checked,report.reportStaff||null]);
   if(!report.checked&&!old)return;if(old&&old.signature===signature)return;
   month.reports[id]={signature,sync:'pending',error:'',entry:Object.assign({},report,{id,version:old?old.entry.version+1:1})};
  });
 }
 function sharedFlushMonth_(month,limit,deadline){
- if(!sharedReportsConfigured_())return 0;
+ if(!sharedReportsConfigured_()&&!Object.values(month.reports).some(function(report){return Array.isArray(report.entry.reportStaff)}))return 0;
  var count=0,props=sharedProps_();
  var reports=Object.values(month.reports).filter(function(report){return report.sync!=='synced'});
  reports.sort(function(a,b){return Number(a.sync==='error')-Number(b.sync==='error')});
@@ -115,7 +115,7 @@ function sharedProgramCheckins_(month,date){
 function sharedReportReceipt_(month,memberId,date){
  var reports=Object.keys(month.reports).map(function(id){return month.reports[id]}).filter(function(r){return r.entry.memberId===memberId&&r.entry.date===date});
  var active=reports.filter(function(r){return r.entry.checked}),map={};try{map=JSON.parse(sharedProps_().getProperty('SHEET_TAB_MAP')||'{}')}catch(error){}
- return {areaCount:active.length,synced:active.filter(function(r){return r.sync==='synced'}).length,pending:reports.filter(function(r){return r.sync==='pending'}).length,failed:reports.filter(function(r){return r.sync==='error'}).length,mappingMissing:reports.some(function(r){return !map[r.entry.communityId]}),noSchedule:month.records[date+':'+memberId]==='출석'&&!month.entries.some(function(e){return e.memberId===memberId&&e.date===date})};
+ return {areaCount:active.length,synced:active.filter(function(r){return r.sync==='synced'}).length,pending:reports.filter(function(r){return r.sync==='pending'}).length,failed:reports.filter(function(r){return r.sync==='error'}).length,mappingMissing:reports.some(function(r){return Array.isArray(r.entry.reportStaff)?!r.entry.reportStaff.length:!map[r.entry.communityId]}),noSchedule:month.records[date+':'+memberId]==='출석'&&!month.entries.some(function(e){return e.memberId===memberId&&e.date===date})};
 }
 function sharedApply_(config,month,memberId,date,status,recalculate,actor,preparedModel,participation,locked){
  var model=preparedModel||sharedModel_(config,month);
@@ -214,7 +214,7 @@ function sharedRpc(request,origin,channel){
   var staff=staffId&&config?(config.staff||[]).find(function(person){return person.id===staffId&&person.active!==false}):null;
   if(staffId&&!staff)admin=false;
   var actor=staff?staff.name:admin?'공용 관리자':'참여자 출석';
-  if(path==='/api/team/status')return sharedReply_({service:'ch-team-api',configured:true,initialized:manifest.initialized,authenticated:admin,staffId:staff?staff.id:'',googleConfigured:sharedReportsConfigured_(),participationPeriods:true,programCheckin:true,calendarNotes:true,calendarEntries:true,local:false,backend:'google'});
+  if(path==='/api/team/status')return sharedReply_({service:'ch-team-api',configured:true,initialized:manifest.initialized,authenticated:admin,staffId:staff?staff.id:'',googleConfigured:!!sharedProps_().getProperty('SPREADSHEET_ID'),staffReportTabs:true,weekdayReportTabs:true,participationPeriods:true,programCheckin:true,calendarNotes:true,calendarEntries:true,local:false,backend:'google'});
   if(path==='/api/integration-status')return sharedReply_({service:'ch-performance-api',configured:sharedReportsConfigured_(),authenticated:admin});
   if(path.startsWith('/api/team/photos/')||path==='/api/team/photo')return sharedPhoto_(book,request,admin);
   if(path==='/api/team/state'){
@@ -312,7 +312,7 @@ function sharedRpc(request,origin,channel){
    if(!appliedChanges.length)return sharedReply_({ok:true,replayed:true,reconcile:false});
    for(var applied of appliedChanges){
     if(applied.type!=='scheduleOverrides'&&applied.type!=='schedules')continue;
-    var item=applied.after;
+    var item=applied.after;ManagementStore.validateReportAssignments(item);
     if(item.active===false)continue;
     if(item.kind!=='cancel'&&(!/^([01]\d|2[0-3]):[0-5]\d$/.test(item.start)||!/^([01]\d|2[0-3]):[0-5]\d$/.test(item.end)||item.start>=item.end))return sharedReply_({error:'일정 시작과 종료 시간을 확인해 주세요.'},400);
     if(applied.type==='scheduleOverrides'&&next.scheduleOverrides.some(function(row){return row.active!==false&&row.id!==item.id&&row.scheduleId===item.scheduleId&&row.date===item.date}))return sharedReply_({error:'같은 날짜의 일정 변경이 먼저 저장됐습니다. 최신 시간표에서 해당 날짜를 열어 주세요.'},409);

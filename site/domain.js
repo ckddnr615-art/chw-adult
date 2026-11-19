@@ -113,6 +113,7 @@
         item.staff=String(item.staff||'').trim();if(!item.staff||item.staff.length>150)throw Error('프로그램 진행 직원을 선택해 주세요.');
       }
       if(type==='schedules'){
+        ManagementStore.validateReportAssignments(item);
         if(!this.list('programs').some(p=>p.id===item.programId))throw Error('사용 중인 프로그램을 선택해 주세요.');
         if(!/^\d{2}:\d{2}$/.test(item.start)||!/^\d{2}:\d{2}$/.test(item.end)||item.start>=item.end||item.end>'23:59')throw Error('종료 시간은 시작 시간 이후여야 합니다.');
         if(item.date&&!/^\d{4}-\d{2}-\d{2}$/.test(item.date))throw Error('일정을 확인해 주세요.');
@@ -145,6 +146,14 @@
         if(!status)continue;const d=key.slice(0,10),id=key.slice(11),member=this.find('members',id);if(!member)continue;
         if(!this.data.days[key]){const communityId=this.memberGroupAt(member,d);this.data.days[key]={memberId:id,name:member.name,date:d,communityId,community:this.communityName(communityId)}}
       }
+    }
+    static validateReportAssignments(item){
+      const map=item.reportStaffByWeekday;
+      if(map!==undefined){
+        if(!map||Array.isArray(map)||typeof map!=='object')throw Error('요일별 실적 담당을 확인해 주세요.');
+        for(const day of Object.keys(map))if(!/^[0-6]$/.test(day)||typeof map[day]!=='string'||!(item.facilitatorIds||[]).includes(map[day]))throw Error('요일별 담당자는 선택한 프로그램 직원 중 지정해 주세요.');
+      }
+      if(item.reportStaffId!==undefined&&item.reportStaffId!==''&&!(item.facilitatorIds||[]).includes(item.reportStaffId))throw Error('당일 실적 담당자를 확인해 주세요.');
     }
     static validateCalendarNote(item){
       const day=item.date||item.id;
@@ -180,8 +189,9 @@
         // A one-day replacement keeps the original audience and owning community.
         const baseProgram=this.find('programs',base.programId),baseArea=this.find('areas',baseProgram?.areaId);
         const facilitatorIds=item.facilitatorIds||program.facilitatorIds||[];
+        const reportStaffId=item.reportStaffId||item.reportStaffByWeekday?.[String(weekday)]||(facilitatorIds.length===1?facilitatorIds[0]:'');
         const communityId=Object.hasOwn(base,'communityId')?base.communityId:(baseArea?.communityId||'');
-        return {...item,program:{...program,name:override?.displayName||program.name,staff:this.staffNames(facilitatorIds)||program.staff},facilitatorIds,area,communityId,community:this.communityName(communityId)};
+        return {...item,program:{...program,name:override?.displayName||program.name,staff:this.staffNames(facilitatorIds)||program.staff},facilitatorIds,reportStaffId,area,communityId,community:this.communityName(communityId)};
       }).filter(Boolean).sort((a,b)=>a.start.localeCompare(b.start));
       const dated=resolved.filter(s=>this.find('schedules',s.id)?.date===d&&s.audienceMode!=='individual');
       return resolved.filter(s=>this.find('schedules',s.id)?.date===d||!dated.some(one=>one.communityId===s.communityId&&one.start<s.end&&s.start<one.end));
@@ -199,7 +209,11 @@
       if(!member||(!schedule&&!entry))throw Error('참여자나 해당 날짜의 일정이 없습니다.');
       if(!entry&&(!member.active||!allowUnassigned&&!this.eligibleMembers(schedule,d).some(m=>m.id===memberId)))throw Error('해당 날짜 소속과 프로그램 커뮤니티가 다릅니다.');
       const before=clone(entry||null);
-      if(!entry){const communityId=this.data.days[d+':'+memberId]?.communityId||this.memberGroupAt(member,d);entry={id:uid(),memberId,scheduleId,date:d,name:member.name,communityId,community:this.communityName(communityId),areaId:schedule.area.id,area:schedule.area.name,programId:schedule.program.id,program:schedule.program.name,staff:schedule.program.staff,facilitatorIds:clone(schedule.facilitatorIds||[]),caseManagerId:this.caseManagerAt(memberId,d),start:schedule.start,end:schedule.end,version:0,createdAt:new Date().toISOString()};this.data.entries.push(entry)}
+      if(!entry){const communityId=this.data.days[d+':'+memberId]?.communityId||this.memberGroupAt(member,d);entry={id:uid(),memberId,scheduleId,date:d,name:member.name,communityId,community:this.communityName(communityId),areaId:schedule.area.id,area:schedule.area.name,programId:schedule.program.id,program:schedule.program.name,staff:schedule.program.staff,facilitatorIds:clone(schedule.facilitatorIds||[]),caseManagerId:this.caseManagerAt(memberId,d),start:schedule.start,end:schedule.end,version:0,createdAt:new Date().toISOString()};
+        if(this.data.days[d+':'+memberId]?.reportMode==='program'){
+          entry.reportStaff=schedule.reportStaffId?[{id:schedule.reportStaffId,name:this.find('staff',schedule.reportStaffId)?.name||''}]:[];
+        }
+        this.data.entries.push(entry)}
       entry.checked=!!checked;entry.version++;entry.sync='pending';entry.updatedAt=new Date().toISOString();entry.error='';this.audit(checked?'참여 체크':'참여 취소','entries',entry.id,before,entry);return entry;
     }
     editEntry(id,fields){const e=this.find('entries',id);if(!e)throw Error('실적이 없습니다.');const before=clone(e);for(const k of ['name','area','program','staff']){const v=String(fields[k]??e[k]).trim();if(!v||v.length>100)throw Error('실적 항목을 1~100자로 입력해 주세요.');e[k]=v}e.version++;e.updatedAt=new Date().toISOString();e.sync='pending';e.error='';this.audit('실적 정정','entries',id,before,e);return e}

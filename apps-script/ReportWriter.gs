@@ -1,11 +1,42 @@
+/* Each staff tab is a view of the same logical performance key. */
+function writeProjectedPerformance_(entry,props){
+ if(!Array.isArray(entry.reportStaff))return writePerformanceToTab_(entry,props);
+ var targets=entry.reportStaff.filter(function(staff,index,rows){return rows.findIndex(function(row){return row.id===staff.id})===index});
+ if(!targets.length||entry.checked&&targets.filter(function(target){return target.checked!==false}).length>1)throw Error('프로그램의 요일별 실적 담당자 한 명을 지정해 주세요.');
+ // Each copy has its own retry journal, while N retains the common performance key.
+ targets.forEach(function(staff){
+  var copy=Object.assign({},entry,{id:'staff-'+sharedHash_(JSON.stringify([entry.id,staff.id])),destinationStaff:staff,staff:staff.name,checked:entry.checked&&staff.checked!==false});
+  writePerformanceToTab_(copy,props);
+ });
+ return {ok:true,id:entry.id,version:entry.version,staffTabs:targets.length};
+}
 /* Daily-area sheet projection used directly by SharedServer.gs. */
-function writeProjectedPerformance_(entry,props) {
-  var map=JSON.parse(props.getProperty('SHEET_TAB_MAP')||'{}'),registry=JSON.parse(props.getProperty('REPORT_TAB_REGISTRY')||'{}'),registered=registry[entry.communityId],tab=map[entry.communityId];
-  if(!tab)throw Error('출석 당시 소속의 시트 매핑이 없습니다.');
-  var book=SpreadsheetApp.openById(props.getProperty('SPREADSHEET_ID')),sheet=registered?book.getSheets().find(function(s){return s.getSheetId()===registered.sheetId}):book.getSheetByName(tab);
-  if(registered&&!sheet)throw Error('연결된 실적 탭이 삭제되었습니다. 기존 탭을 복구해 주세요.');
-  if(sheet)tab=sheet.getName();var aliases=[tab].concat(registered?registered.names:[]);
-  if(!sheet&&entry.memberId)sheet=book.insertSheet(tab);if(!sheet)throw Error('대상 시트가 없습니다. 매핑을 확인하세요.');
+function writePerformanceToTab_(entry,props) {
+  var book=SpreadsheetApp.openById(props.getProperty('SPREADSHEET_ID')),sheet,tab,registered;
+  if(entry.destinationStaff){
+    var registry=JSON.parse(props.getProperty('REPORT_STAFF_TAB_REGISTRY')||'{}');
+    registered=registry[entry.destinationStaff.id];
+    tab=entry.destinationStaff.name+' 실적';
+    if(!entry.destinationStaff.id||!entry.destinationStaff.name||tab.length>100||/[\[\]:*?\/\\]/.test(tab)||tab.indexOf('__CH_')===0)throw Error('실적 담당 직원 이름을 확인해 주세요.');
+    sheet=registered?book.getSheets().find(function(s){return s.getSheetId()===registered.sheetId}):null;
+    if(registered&&!sheet)throw Error('직원 실적 탭이 삭제되었습니다. 기존 탭을 복구해 주세요.');
+    if(!registered){
+      // New staff tabs never adopt an unrelated existing tab.
+      if(book.getSheets().some(function(s){return s.getName().toLowerCase()===tab.toLowerCase()}))throw Error(tab+' 이름의 탭이 이미 있습니다. 새 직원 탭과 구분하도록 기존 탭 이름을 변경해 주세요.');
+      sheet=book.insertSheet(tab);
+      registered={sheetId:sheet.getSheetId(),names:[tab]};registry[entry.destinationStaff.id]=registered;
+      props.setProperty('REPORT_STAFF_TAB_REGISTRY',JSON.stringify(registry));
+    }
+  }else{
+    var map=JSON.parse(props.getProperty('SHEET_TAB_MAP')||'{}'),registry=JSON.parse(props.getProperty('REPORT_TAB_REGISTRY')||'{}');
+    registered=registry[entry.communityId];tab=map[entry.communityId];
+    if(!tab)throw Error('출석 당시 소속의 시트 매핑이 없습니다.');
+    sheet=registered?book.getSheets().find(function(s){return s.getSheetId()===registered.sheetId}):book.getSheetByName(tab);
+    if(registered&&!sheet)throw Error('연결된 실적 탭이 삭제되었습니다. 기존 탭을 복구해 주세요.');
+    if(!sheet&&entry.memberId)sheet=book.insertSheet(tab);
+    if(!sheet)throw Error('대상 시트가 없습니다. 매핑을 확인하세요.');
+  }
+  tab=sheet.getName();var aliases=[tab].concat(registered?registered.names:[]);
   var labelHeader=entry.reportMode==='program'?'프로그램명':'영역명';
   var expected=entry.memberId?['이름','','','','','','사업날짜',labelHeader,'','','','담당자','','출석고유키(자동)']:['이름','','','','','','사업날짜',labelHeader,'담당자'];
   if(sheet.getLastRow()===0)sheet.getRange(1,1,1,expected.length).setValues([expected]);
