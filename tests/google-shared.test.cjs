@@ -470,3 +470,37 @@ test('같은 프로그램도 요일별 담당 한 직원의 탭에만 기록하�
  const cancel=e.call('/api/team/attendance',{date:'2026-11-19',memberId:'person-1',status:'결석',requestId:crypto.randomUUID()});
  assert.equal(cancel.body.reportReceipt.failed,0);assert.equal(a.rows[1][0],'');assert.equal(b.rows[1][0],'검증 이용인');
 });
+
+test('참여자 이름 수정은 변경 필드만 병합하며 월 자료·공휴일 조회 없이 저장한다',()=>{
+ const e=environment();e.login();const model=e.model();e.call('/api/team/initialize',{management:model.data,records:{}});
+ const member=model.data.members[0];
+ const before={name:member.name,communityId:member.communityId,caseManagerId:'',photo:null};
+ const updatedPhoto={id:'test-photo',url:'/api/team/photos/test-photo/abcdef',bytes:500,zoom:1,x:50,y:50};
+ const serverMember={...member,photo:updatedPhoto,serverOnlyField:'보존'};
+ assert.equal(e.call('/api/team/config',{changes:[{type:'members',id:member.id,before:member,after:serverMember}]}).status,200);
+ e.context.sharedMonth_=()=>{throw Error('참여자 수정 중 월 자료를 읽으면 안 됨')};
+ e.context.sharedHolidays_=()=>{throw Error('참여자 수정 중 공휴일을 읽으면 안 됨')};
+ const after={...before,name:'수정한 이름'};
+ const command={memberId:member.id,before,after};
+ const saved=e.call('/api/team/member',command);
+ assert.equal(saved.status,200);assert.equal(saved.body.member.name,after.name);
+ assert.deepEqual(saved.body.member.photo,updatedPhoto);assert.equal(saved.body.member.serverOnlyField,'보존');
+ const replay=e.call('/api/team/member',command);
+ assert.equal(replay.status,200);assert.equal(replay.body.unchanged,true);assert.equal(replay.body.revision,saved.body.revision);
+ const conflict=e.call('/api/team/member',{...command,after:{...after,name:'오래된 화면의 이름'}});
+ assert.equal(conflict.status,409);assert.deepEqual(conflict.body.conflict.fields,['name']);assert.equal(conflict.body.currentFields.name,after.name);
+ const confirmed=e.call('/api/team/member',{...command,before:conflict.body.currentFields,after:{...conflict.body.currentFields,name:'확인 후 수정'}});
+ assert.equal(confirmed.status,200);assert.equal(confirmed.body.member.name,'확인 후 수정');
+ assert.deepEqual(confirmed.body.member.photo,updatedPhoto);
+ e.logout();assert.equal(e.call('/api/team/member',command).status,401);
+});
+
+test('참여자의 소속·사례관리 담당 변경은 원래 이력을 보존하고 누락된 필드 요청을 차단한다',()=>{
+ const e=environment();e.login();const model=e.model(),day='2026-10-29';
+ const staff=model.save('staff','',{name:'새 사례 담당'},day),community=model.save('communities','',{name:'새 소속'},day);
+ e.call('/api/team/initialize',{management:model.data,records:{}});
+ const before={name:'검증 이용인',communityId:'community-1',caseManagerId:'',photo:null};
+ const result=e.call('/api/team/member',{memberId:'person-1',before,after:{...before,communityId:community.id,caseManagerId:staff.id}});
+ assert.equal(result.status,200);assert.equal(result.body.member.history.length,2);assert.equal(result.body.caseAssignments[0].staffId,staff.id);
+ assert.equal(e.call('/api/team/member',{memberId:'person-1',before:{name:before.name},after:{name:'불완전'}}).status,400);
+});

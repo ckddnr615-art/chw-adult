@@ -18,7 +18,7 @@ async function teamRequest(path,input){
   try{result=await response.json()}catch{throw Error('서버 응답을 확인하지 못했습니다.')}
   if(!response.ok||result.ok===false)throw Object.assign(Error(result.error||'서버 저장 실패'),{
     status:response.status,conflict:result.conflict||response.status===409,currentStatus:result.currentStatus,participation:result.participation,
-    code:result.code,date:result.date,revision:result.revision,retryable:result.busy===true||response.status===503
+    code:result.code,date:result.date,revision:result.revision,currentFields:result.currentFields,retryable:result.busy===true||response.status===503
   });
   return result;
 }
@@ -31,6 +31,26 @@ async function loadTeamMonth(month=date.slice(0,7),full=false){
   if(!configPending&&!configSaving)monthRevisions.set(month,data.revision);team.active=true;team.initialized=true;return true;
 }
 function configChanges(snapshot){const changes=[];for(const type of CONFIG_TYPES){const before=new Map((configBaseline?.[type]||[]).map(x=>[x.id,x]));for(const after of snapshot[type])if(JSON.stringify(before.get(after.id)||null)!==JSON.stringify(after))changes.push({type,id:after.id,before:before.get(after.id)||null,after})}return changes}
+function memberEditFields(member){
+ return JSON.parse(JSON.stringify({name:member.name,communityId:member.communityId,caseManagerId:management.caseManagerAt(member.id,date),photo:member.photo||null}));
+}
+async function saveMemberDetails(id,before,after){
+ clearTimeout(configTimer);
+ if(configSaving)await saveTeamConfig();
+ const result=await teamRequest('member',{memberId:id,before,after});
+ const replaceMember=rows=>rows.map(member=>member.id===id?JSON.parse(JSON.stringify(result.member)):member);
+ const replaceAssignments=rows=>(rows||[]).filter(row=>row.memberId!==id).concat(result.caseAssignments);
+ management.data.members=replaceMember(management.data.members);
+ management.data.caseAssignments=replaceAssignments(management.data.caseAssignments);
+ if(configBaseline){
+  configBaseline.members=replaceMember(configBaseline.members);
+  configBaseline.caseAssignments=replaceAssignments(configBaseline.caseAssignments);
+ }
+ if(!configConflict||configConflict.type==='members'&&configConflict.id===id){team.error='';configConflict=null;configRetryable=false}
+ configPending=configChanges(currentConfig()).length>0;
+ originalPersist();refreshCollections();
+ return result;
+}
 async function requireSharedWriteAccess(){
   await teamBoot;
   const response=await fetch('/api/team/status',{credentials:'same-origin'});

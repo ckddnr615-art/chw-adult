@@ -19,18 +19,68 @@ async function normalizedPhoto(file){
 function dataUrl(blob){return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=reject;reader.readAsDataURL(blob)})}
 function openMemberPhotoEditor(id=''){
   const member=id?management.find('members',id):{},initialPhoto=member.photo;
-  let draftBlob=null,previewUrl='',removePhoto=false,cropTouched=false;
+  const originalFields=id?memberEditFields(member):null;
+  let beforeFields=originalFields;
+  const editedFields=new Set();
+  let draftBlob=null,uploadedPhoto=null,previewUrl='',removePhoto=false,cropTouched=false;
   modal(`<h2>참여자 ${id?'수정':'등록'}</h2><form id="memberPhotoForm" class="entityform">${field('이름','name',member.name||'')}<label>소속<select name="communityId" required>${opts(management.list('communities'),member.communityId||managementFilter)}</select></label><label>사례관리 담당 직원<select name="caseManagerId"><option value="">미지정</option>${opts(management.list('staff'),management.caseManagerAt(id,date))}</select></label><section class="photo-editor"><h3>참여자 사진</h3><div class="photo-preview" id="photoPreview">${photoMarkup(member,'editing-photo')}</div><label>사진 선택 · 최대 20MB<input id="memberPhotoFile" type="file" accept="image/jpeg,image/png,image/webp,image/gif"></label><p id="photoSize" class="formhint">원본은 전송하지 않고 기기에서 128KB 이하로 줄입니다.</p><label>확대 크기<input id="photoZoom" type="range" min="0.5" max="3" step="0.05" value="${initialPhoto?.zoom||1}"></label><label>좌우 위치<input id="photoX" type="range" min="0" max="100" value="${initialPhoto?.x??50}"></label><label>위아래 위치<input id="photoY" type="range" min="0" max="100" value="${initialPhoto?.y??50}"></label><button type="button" class="secondary" id="centerMemberPhoto">가운데로 맞추기</button><p class="formhint">사진이 영역에 딱 맞아도 좌우·위아래로 이동할 수 있습니다.</p><button type="button" class="secondary" id="removeMemberPhoto">사진 제거</button></section><p id="memberPhotoError" class="formerror" role="alert"></p><button class="primary" id="savePhotoMember" type="submit">참여자 저장</button></form>`);
   void hydratePhotos();
   const update=()=>{cropTouched=true;const img=$('#photoPreview img');if(img)positionPhoto(img,{cropVersion:2,x:Number($('#photoX').value),y:Number($('#photoY').value),zoom:Number($('#photoZoom').value)})};
   $('#centerMemberPhoto').onclick=()=>{$('#photoX').value=50;$('#photoY').value=50;$('#photoZoom').value=1;update()};
   for(const selector of ['#photoZoom','#photoX','#photoY'])$(selector).oninput=update;
-  $('#memberPhotoFile').onchange=async e=>{const file=e.target.files[0];if(!file)return;$('#savePhotoMember').disabled=true;$('#memberPhotoError').textContent='';$('#photoSize').textContent='사진 크기를 줄이고 있어요…';try{draftBlob=await normalizedPhoto(file);if(previewUrl)URL.revokeObjectURL(previewUrl);previewUrl=URL.createObjectURL(draftBlob);removePhoto=false;$('#photoPreview').innerHTML=`<img src="${previewUrl}" alt="사진 구도 미리보기">`;$('#photoX').value=50;$('#photoY').value=50;$('#photoZoom').value=1;update();$('#photoSize').textContent=`원본 ${(file.size/1024/1024).toFixed(2)}MB → 저장 ${(draftBlob.size/1024).toFixed(1)}KB · 축소율 ${Math.round((1-draftBlob.size/file.size)*100)}%`}catch(error){$('#memberPhotoError').textContent=error.message;$('#photoSize').textContent='사진을 다시 선택해 주세요.'}finally{$('#savePhotoMember').disabled=false}};
-  $('#removeMemberPhoto').onclick=()=>{removePhoto=true;draftBlob=null;$('#photoPreview').innerHTML='<span>사진 없음</span>';$('#memberPhotoFile').value=''};
-  $('#memberPhotoForm').onsubmit=async e=>{e.preventDefault();const button=$('#savePhotoMember');button.disabled=true;$('#memberPhotoError').textContent='';let backup='';try{await requireSharedWriteAccess();backup=JSON.stringify(management.data);
-    const fields=Object.fromEntries(new FormData(e.target));fields.photo=removePhoto?null:(initialPhoto?{...initialPhoto,x:Number($('#photoX').value),y:Number($('#photoY').value),zoom:Number($('#photoZoom').value),cropVersion:cropTouched?2:initialPhoto.cropVersion}:null);
-    if(draftBlob){const photoId=crypto.randomUUID();let photo={id:photoId,cropVersion:2,x:Number($('#photoX').value),y:Number($('#photoY').value),zoom:Number($('#photoZoom').value),bytes:draftBlob.size};if(team.active){const result=await teamRequest('photo',{id:photoId,dataUrl:await dataUrl(draftBlob)});photo.url=result.url}else await cachePhoto(photoId,draftBlob);fields.photo=photo}
-    management.save('members',id,fields,date);if(!persist())throw Error('저장하지 못했습니다.');await saveTeamConfig();if(team.error)throw Error(team.error);$('#dialog').close();render();toast('참여자와 사진을 Google 공동 저장소에 저장했습니다.');
-  }catch(error){if(backup)management.data=JSON.parse(backup);$('#memberPhotoError').textContent=error.message;button.disabled=false}};
+  $('#memberPhotoFile').onchange=async e=>{const file=e.target.files[0];if(!file)return;$('#savePhotoMember').disabled=true;$('#memberPhotoError').textContent='';$('#photoSize').textContent='사진 크기를 줄이고 있어요…';try{draftBlob=await normalizedPhoto(file);uploadedPhoto=null;if(previewUrl)URL.revokeObjectURL(previewUrl);previewUrl=URL.createObjectURL(draftBlob);removePhoto=false;$('#photoPreview').innerHTML=`<img src="${previewUrl}" alt="사진 구도 미리보기">`;$('#photoX').value=50;$('#photoY').value=50;$('#photoZoom').value=1;update();$('#photoSize').textContent=`원본 ${(file.size/1024/1024).toFixed(2)}MB → 저장 ${(draftBlob.size/1024).toFixed(1)}KB · 축소율 ${Math.round((1-draftBlob.size/file.size)*100)}%`}catch(error){$('#memberPhotoError').textContent=error.message;$('#photoSize').textContent='사진을 다시 선택해 주세요.'}finally{$('#savePhotoMember').disabled=false}};
+  $('#removeMemberPhoto').onclick=()=>{removePhoto=true;draftBlob=null;uploadedPhoto=null;$('#photoPreview').innerHTML='<span>사진 없음</span>';$('#memberPhotoFile').value=''};
+  $('#memberPhotoForm').onsubmit=async event=>{
+    event.preventDefault();
+    const button=$('#savePhotoMember'),feedback=$('#memberPhotoError');
+    button.disabled=true;button.textContent='저장 중…';feedback.textContent='';
+    let backup='';
+    try{
+      await teamBoot;
+      if(!id||!team.active||!team.authenticated)await requireSharedWriteAccess();
+      if(id&&!team.memberPatch)throw Error('참여자 저장 개선을 사용하려면 Apps Script를 새 버전으로 배포한 뒤 새로고침해 주세요.');
+      const fields=Object.fromEntries(new FormData(event.target));
+      fields.photo=removePhoto?null:initialPhoto?{...initialPhoto}:null;
+      if(fields.photo&&cropTouched)Object.assign(fields.photo,{x:Number($('#photoX').value),y:Number($('#photoY').value),zoom:Number($('#photoZoom').value),cropVersion:2});
+      if(draftBlob){
+        if(!uploadedPhoto){
+          const photoId=crypto.randomUUID(),result=await teamRequest('photo',{id:photoId,dataUrl:await dataUrl(draftBlob)});
+          uploadedPhoto={id:photoId,url:result.url,bytes:draftBlob.size,cropVersion:2};
+        }
+        fields.photo={...uploadedPhoto,x:Number($('#photoX').value),y:Number($('#photoY').value),zoom:Number($('#photoZoom').value)};
+      }
+      fields.name=String(fields.name||'').trim();
+      if(!fields.name||fields.name.length>80)throw Error('이름은 1~80자로 입력해 주세요.');
+      if(id){
+        const after={...beforeFields};
+        for(const key of ['name','communityId','caseManagerId','photo']){
+          if(JSON.stringify(originalFields[key])!==JSON.stringify(fields[key]))editedFields.add(key);
+          if(editedFields.has(key))after[key]=fields[key];
+        }
+        await saveMemberDetails(id,beforeFields,after);
+      }else{
+        backup=JSON.stringify(management.data);
+        management.save('members','',fields,date);
+        if(!persist())throw Error('저장하지 못했습니다.');
+        await saveTeamConfig();if(team.error)throw Error(team.error);
+      }
+      $('#dialog').close();render();toast('참여자를 저장했습니다.');
+    }catch(error){
+      if(backup)management.data=JSON.parse(backup);
+      feedback.textContent=error.message;
+      if(error.currentFields){
+        const values=error.currentFields,labels={name:'이름',communityId:'소속',caseManagerId:'사례관리 담당',photo:'사진'};
+        for(const key of error.conflict?.fields||[]){
+          const line=document.createElement('p');
+          const value=key==='communityId'?management.communityName(values[key]):key==='caseManagerId'?management.find('staff',values[key])?.name||'미지정':key==='photo'?'사진 정보가 변경됨':values[key];
+          line.textContent=(labels[key]||key)+' · 현재 저장된 값 '+value;
+          feedback.append(line);
+        }
+        const retry=document.createElement('button');retry.type='button';retry.className='secondary';retry.textContent='현재 값을 확인했고 내 수정 저장';
+        retry.onclick=()=>{beforeFields=JSON.parse(JSON.stringify(values));event.target.requestSubmit()};
+        feedback.append(retry);
+      }
+    }finally{button.disabled=false;button.textContent='참여자 저장'}
+  };
   $('#dialog').addEventListener('close',()=>{if(previewUrl)URL.revokeObjectURL(previewUrl)},{once:true});
 }

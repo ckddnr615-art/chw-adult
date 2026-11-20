@@ -11,3 +11,19 @@ test('공동 자료 읽기 실패는 사진 저장 성공으로 취급하지 않
 test('진행 중인 공동 설정 저장을 끝까지 기다린다',async()=>{
  const e={configSaving:true,configSaveWaiters:[]};const ctx=vm.createContext(e);const save=source.slice(source.indexOf('async function saveTeamConfig('),source.indexOf('persist=function('));vm.runInContext(save,ctx);let done=false;const pending=ctx.saveTeamConfig().then(()=>{done=true});await Promise.resolve();assert.equal(done,false);assert.equal(e.configSaveWaiters.length,1);e.configSaveWaiters[0]();await pending;assert.equal(done,true);
 });
+
+test('이름 수정 저장은 한 요청으로 보내고 확인된 참여자와 담당 이력만 갱신한다',async()=>{
+ const member={id:'m1',name:'이전 이름',communityId:'c1'},other={id:'m2',name:'다른 사람'};
+ const management={data:{members:[member,other],caseAssignments:[]},caseManagerAt:()=>''};
+ const baseline=JSON.parse(JSON.stringify(management.data));let requests=0,persists=0;
+ const ctx=vm.createContext({management,configBaseline:baseline,configTimer:0,clearTimeout(){},configSaving:false,configConflict:{type:'members',id:'m1'},configPending:true,configRetryable:false,date:'2026-10-29',team:{error:'이전 충돌'},currentConfig:()=>management.data,configChanges:()=>[],originalPersist:()=>{persists++},refreshCollections(){},teamRequest:async(path,input)=>{
+  requests++;assert.equal(path,'member');assert.equal(input.memberId,'m1');
+  assert.equal(input.before.name,'이전 이름');assert.equal(input.after.name,'새 이름');
+  return {member:{...member,name:'새 이름'},caseAssignments:[],revision:10};
+ }});
+ vm.runInContext(source.slice(source.indexOf('function memberEditFields('),source.indexOf('async function requireSharedWriteAccess(')),ctx);
+ const before=ctx.memberEditFields(member);await ctx.saveMemberDetails('m1',before,{...before,name:'새 이름'});
+ assert.equal(requests,1);assert.equal(persists,1);assert.equal(management.data.members[0].name,'새 이름');
+ assert.equal(baseline.members[0].name,'새 이름');assert.equal(management.data.members[1].name,'다른 사람');
+ assert.equal(ctx.team.error,'');assert.equal(ctx.configPending,false);
+});

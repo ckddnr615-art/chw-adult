@@ -25,6 +25,9 @@ function sharedMonth_(book,manifest,month){return sharedRead_(book,manifest.mont
 function sharedSaveMonth_(book,manifest,month,value){manifest.months[month]=sharedWrite_(book,'M_'+month.replace('-','_'),manifest.months[month],value)}
 function sharedModel_(config,month){return new ManagementStore(Object.assign({},config,{days:month.days,entries:month.entries,audit:[]}))}
 function sharedConfigOnly_(model){var data={version:1,timetableVersion:1};SHARED_TYPES_.forEach(function(k){data[k]=model.data[k]||[]});return data}
+function sharedMemberFields_(model,member,today){
+ return {name:member.name,communityId:member.communityId,caseManagerId:model.caseManagerAt(member.id,today),photo:member.photo||null};
+}
 function sharedComparable_(value){
  if(value===null||typeof value!=='object')return JSON.stringify(value);
  if(Array.isArray(value))return '['+value.map(sharedComparable_).join(',')+']';
@@ -214,7 +217,7 @@ function sharedRpc(request,origin,channel){
   var staff=staffId&&config?(config.staff||[]).find(function(person){return person.id===staffId&&person.active!==false}):null;
   if(staffId&&!staff)admin=false;
   var actor=staff?staff.name:admin?'공용 관리자':'참여자 출석';
-  if(path==='/api/team/status')return sharedReply_({service:'ch-team-api',configured:true,initialized:manifest.initialized,authenticated:admin,staffId:staff?staff.id:'',googleConfigured:!!sharedProps_().getProperty('SPREADSHEET_ID'),staffReportTabs:true,weekdayReportTabs:true,participationPeriods:true,programCheckin:true,calendarNotes:true,calendarEntries:true,local:false,backend:'google'});
+  if(path==='/api/team/status')return sharedReply_({service:'ch-team-api',configured:true,initialized:manifest.initialized,authenticated:admin,staffId:staff?staff.id:'',googleConfigured:!!sharedProps_().getProperty('SPREADSHEET_ID'),staffReportTabs:true,weekdayReportTabs:true,memberPatch:true,participationPeriods:true,programCheckin:true,calendarNotes:true,calendarEntries:true,local:false,backend:'google'});
   if(path==='/api/integration-status')return sharedReply_({service:'ch-performance-api',configured:sharedReportsConfigured_(),authenticated:admin});
   if(path.startsWith('/api/team/photos/')||path==='/api/team/photo')return sharedPhoto_(book,request,admin);
   if(path==='/api/team/state'){
@@ -283,6 +286,35 @@ function sharedRpc(request,origin,channel){
    return sharedReply_(Object.assign({},result,{revision:manifest.revision,reportReceipt:sharedReportReceipt_(month,member.id,date)}));
   }
   if(!admin)return sharedReply_({error:'관리자 인증이 필요합니다.'},401);
+  if(path==='/api/team/member'&&request.method==='POST'){
+   if(!manifest.initialized||!config)return sharedReply_({error:'공동 저장소를 먼저 준비해 주세요.'},409);
+   var model=sharedModel_(config,{days:{},entries:[]}),member=model.find('members',input.memberId);
+   if(!member||member.active===false)return sharedReply_({error:'참여자가 삭제되었거나 변경되었습니다. 명단을 확인해 주세요.'},409);
+   var before=input.before,after=input.after,allowed=['name','communityId','caseManagerId','photo'];
+   if(!before||!after||typeof before!=='object'||typeof after!=='object'||allowed.some(function(field){return !Object.prototype.hasOwnProperty.call(before,field)||!Object.prototype.hasOwnProperty.call(after,field)}))return sharedReply_({error:'참여자 수정 요청을 확인해 주세요.'},400);
+   if(typeof after.name!=='string'||typeof after.communityId!=='string'||typeof after.caseManagerId!=='string')return sharedReply_({error:'참여자 이름과 담당을 확인해 주세요.'},400);
+   var current=sharedMemberFields_(model,member,today),fields={},conflicts=[];
+   allowed.forEach(function(field){
+    if(sharedComparable_(before[field])===sharedComparable_(after[field]))return;
+    if(sharedComparable_(current[field])!==sharedComparable_(before[field])&&sharedComparable_(current[field])!==sharedComparable_(after[field]))conflicts.push(field);
+    if(sharedComparable_(current[field])!==sharedComparable_(after[field]))fields[field]=after[field];
+   });
+   if(conflicts.length)return sharedReply_({error:'이 참여자의 같은 항목이 변경되었습니다. 최신 값과 입력 내용을 확인해 주세요.',conflict:{type:'members',id:member.id,current:member,fields:conflicts},currentFields:current},409);
+   if(Object.prototype.hasOwnProperty.call(fields,'photo')&&fields.photo!==null){
+    var photo=fields.photo;
+    if(typeof photo!=='object'||Array.isArray(photo)||typeof photo.id!=='string'||!/^[-a-zA-Z0-9]{1,100}$/.test(photo.id)||typeof photo.url!=='string'||!/^\/api\/team\/photos\/[-a-zA-Z0-9]+\/[a-f0-9]+$/.test(photo.url)||JSON.stringify(photo).length>2500)return sharedReply_({error:'사진 정보를 확인해 주세요.'},400);
+   }
+   var changed=Object.keys(fields).length>0;
+   if(changed){
+    member=model.save('members',member.id,fields,today);
+    var next=JSON.parse(JSON.stringify(config));
+    next.members=model.data.members;next.caseAssignments=model.data.caseAssignments;
+    next.configAudit=(next.configAudit||[]).concat(model.data.audit.map(function(item){return Object.assign({},item,{actor:actor})})).slice(-150);
+    if(JSON.stringify(next).length>950000)throw Error('기초 자료 용량 초과');
+    manifest.config=sharedWrite_(book,'CONFIG',manifest.config,next);sharedCommit_(book,manifest);
+   }
+   return sharedReply_({ok:true,member:member,memberFields:sharedMemberFields_(model,member,today),caseAssignments:model.data.caseAssignments.filter(function(row){return row.memberId===member.id}),revision:manifest.revision,unchanged:!changed});
+  }
   if(path==='/api/team/program-attendance'&&request.method==='POST'){
    var d=input.date,monthKey=String(d||'').slice(0,7);
    if(!config||!/^\d{4}-\d{2}-\d{2}$/.test(d)||d>today||typeof input.checked!=='boolean'||!Number.isInteger(input.expectedVersion)||input.expectedVersion<0)return sharedReply_({error:'참여 실적 정정 요청을 확인해 주세요.'},400);
