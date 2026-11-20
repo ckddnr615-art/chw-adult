@@ -129,10 +129,17 @@ function bindParticipantSearch(){
  search.oninput=paint;paint();
 }
 function kioskAffiliationChoices(){
- const groups=management.kioskAffiliations();
- return '<section class="kiosk-affiliation-entry" aria-labelledby="kioskAffiliationTitle"><h2 id="kioskAffiliationTitle">내 대기실에서 찾기</h2><p class="kiosk-waiting-room-help">활동 전후에 기다리는 곳을 골라 주세요.</p><div class="kiosk-program-grid">'+groups.map((community,index)=>
-  '<button type="button" class="kiosk-program-card" data-kiosk-affiliation="'+esc(community.id)+'"><span class="communityicon '+['green','blue','orange','purple'][index%4]+'">'+groupIcon(index,community.shape)+'</span><strong>'+esc(community.name)+'</strong></button>'
- ).join('')+'</div></section>';
+ const groups=management.kioskAffiliations(),counts=new Map();
+ for(const member of management.list('members')){
+  const id=management.memberGroupAt(member,date);
+  if(!counts.has(id))counts.set(id,{total:0,present:0});
+  const count=counts.get(id);count.total++;
+  if(['출석','지각','조퇴'].includes(status(member)))count.present++;
+ }
+ return '<section class="kiosk-affiliation-entry" aria-labelledby="kioskAffiliationTitle"><h2 id="kioskAffiliationTitle">내 대기실에서 찾기</h2><p class="kiosk-waiting-room-help">활동 전후에 기다리는 곳을 골라 주세요.</p><div class="kiosk-program-grid">'+groups.map((community,index)=>{
+  const count=counts.get(community.id)||{total:0,present:0};
+  return '<button type="button" class="kiosk-program-card" data-kiosk-affiliation="'+esc(community.id)+'" aria-label="'+esc(community.name)+' 출석 '+count.present+'명, 전체 '+count.total+'명"><span class="communityicon '+['green','blue','orange','purple'][index%4]+'">'+groupIcon(index,community.shape)+'</span><span class="kiosk-room-label"><strong>'+esc(community.name)+'</strong><span class="kiosk-room-count">출석 '+count.present+' / '+count.total+'명</span></span></button>';
+ }).join('')+'</div></section>';
 }
 kiosk=function(){
  const closed=management.holidayName(date),holidayPending=!holidayYears.has(date.slice(0,4));
