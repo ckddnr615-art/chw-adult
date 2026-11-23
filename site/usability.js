@@ -243,6 +243,7 @@ function updateScheduleStaff(store,scheduleId,assignments,from){
  return schedule.date?store.save('schedules',scheduleId,fields,from):store.reviseSchedule(scheduleId,fields,from);
 }
 function bindProgramStaffQuickEditors(){
+ document.querySelectorAll('[data-program-add-schedule]').forEach(button=>button.onclick=()=>openProgramRegistration(button.dataset.programAddSchedule,'new'));
  document.querySelectorAll('[data-split-weekdays]').forEach(button=>button.onclick=()=>{
   const id=button.dataset.splitWeekdays,schedule=management.find('schedules',id),from=programStaffDrafts.get(id)?.from||(schedule.validFrom&&schedule.validFrom>date?schedule.validFrom:date);
   modal('<h2>요일별 일정으로 나누기</h2><p>'+esc(management.find('programs',schedule.programId)?.name||'프로그램')+' · '+esc(from)+'부터 각 요일을 별도 일정으로 관리합니다.</p><p>현재 참여자 명단은 각 요일에 유지됩니다. 나눈 뒤 요일별 담당자와 참여자를 각각 수정해 주세요. 이전 기록은 보관합니다.</p><button type="button" class="primary" id="confirmSplitWeekdays">요일별로 나누기</button>');

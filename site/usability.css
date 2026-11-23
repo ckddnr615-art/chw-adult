@@ -227,3 +227,11 @@ body.participant-mode dialog:has(.kiosk-photo-grid){width:min(720px,calc(100% - 
  .program-wide-actions button{display:flex;margin-top:8px;white-space:normal}
 }
 @media screen{.schedule-row-actions{display:flex;align-items:flex-start;flex-wrap:wrap;gap:8px;white-space:normal;min-width:180px;max-width:320px}.schedule-row-actions button{margin:0}}
+@media screen{
+ .program-schedule-picker{display:flex;align-items:flex-end;flex-wrap:wrap;gap:12px}
+ .program-schedule-picker>label{display:grid;gap:8px;flex:1 1 260px;min-width:0}
+ .program-schedule-picker select{width:100%;min-width:0}
+ .program-schedule-picker>button{flex:0 0 auto;min-height:46px}
+ .program-add-schedule{display:flex;margin-top:12px;white-space:nowrap}
+ @media(max-width:600px){.program-schedule-picker>button{width:100%}}
+}
