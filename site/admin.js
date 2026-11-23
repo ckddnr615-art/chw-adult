@@ -136,13 +136,16 @@ function caseRegisterGroups(store,attendance,month,today){
   for(const member of store.data.members){
     if(member.active===false&&!dates.some(day=>attendance[day+':'+member.id]))continue;
     const assignedRows=new Map();
+    const registeredFrom=(member.history||[]).map(item=>item.from).filter(Boolean).sort()[0];
     for(const [index,day] of dates.entries()){
       const key=day+':'+member.id;
       const archiveDay=member.deletedAt?.slice(0,10);
-      if(!attendance[key]&&(!store.memberGroupAt(member,day)||(member.active===false&&(!archiveDay||day>archiveDay))))continue;
-      const staffId=store.caseManagerAt(member.id,day)||'unassigned';
+      const beforeRegistration=!!registeredFrom&&registeredFrom.slice(0,7)===month&&day<registeredFrom;
+      if(!attendance[key]&&((!store.memberGroupAt(member,day)&&!beforeRegistration)||(member.active===false&&(!archiveDay||day>archiveDay))))continue;
+      const staffId=store.caseManagerAt(member.id,beforeRegistration?registeredFrom:day)||'unassigned';
       if(!assignedRows.has(staffId))assignedRows.set(staffId,{member,cells:dates.map(()=>null)});
-      assignedRows.get(staffId).cells[index]={key,mark:store.registerMark(attendance,member.id,day,today)};
+      const mark=store.registerMark(attendance,member.id,day,today);
+      assignedRows.get(staffId).cells[index]={key,mark:beforeRegistration&&!attendance[key]?(mark==='휴'?'휴':''):mark,...(beforeRegistration&&!attendance[key]?{readOnly:true}:{})};
     }
     for(const [staffId,row] of assignedRows){
       if(!groups.has(staffId)){
@@ -158,6 +161,7 @@ function registerDates(month){return Array.from({length:monthDays(month)},(_,i)=
 function visibleRegisterGroups(month){return caseRegisterGroups(management,records,month,date).filter(group=>!reportStaff||group.id===reportStaff)}
 function registerCell(cell,member,index){
   if(!cell)return '<td class="register-unassigned-day"></td>';
+  if(cell.readOnly)return '<td title="등록 전 날짜">'+(cell.mark==='휴'?'휴':'')+'</td>';
   const period=management.data.days[cell.key]?.participation;
   const label=cell.mark==='/'?(period==='am'?'오전만 참여':period==='pm'?'오후만 참여':'출석'):cell.mark==='O'?'결석':cell.mark==='휴'?'휴무일':'미입력';
   const hint=member.name+' '+(index+1)+'일 '+label;
@@ -177,7 +181,7 @@ reports=function(){
   const staff=caseRegisterGroups(management,records,reportMonth,date);
   const options='<option value="">전체 담당자</option>'+opts(staff,reportStaff,s=>s.name+(s.archived?' (삭제한 직원)':''));
   return heading('월별 출석부','출석 / · 결석 O · 주말과 휴무일 휴. 지난 운영일과 오늘의 미입력은 결석으로 표시합니다.')+
-    '<section class="panel"><div class="filters"><label>조회 월<input id="reportMonth" type="month" value="'+esc(reportMonth)+'" required></label><label>사례관리 담당자<select id="reportStaff">'+options+'</select></label><button class="secondary" data-print-document>인쇄 / PDF 저장</button><button id="exportRegister" class="secondary">↓ 월별 CSV 다운로드</button></div><p class="notice">담당자가 바뀐 날부터 새 담당자 출석부에 표시됩니다. 날짜 칸을 눌러 출결을 수정할 수 있습니다.</p><div id="monthTable" class="tablewrap">'+monthTable(reportMonth)+'</div></section>';
+    '<section class="panel"><div class="filters"><label>조회 월<input id="reportMonth" type="month" value="'+esc(reportMonth)+'" required></label><label>사례관리 담당자<select id="reportStaff">'+options+'</select></label><button class="secondary" data-print-document>인쇄 / PDF 저장</button><button id="exportRegister" class="secondary">↓ 월별 CSV 다운로드</button></div><p class="notice">담당자가 바뀐 날부터 새 담당자 출석부에 표시됩니다. 신규 등록자의 등록 월도 월초부터 주말·휴무일을 표시하며, 등록 전 평일은 빈칸으로 둡니다. 날짜 칸을 눌러 출결을 수정할 수 있습니다.</p><div id="monthTable" class="tablewrap">'+monthTable(reportMonth)+'</div></section>';
 };
 function editDay(key){const d=key.slice(0,10),id=key.slice(11),member=management.find('members',id);if(d>date){toast('미래 날짜에는 출결을 기록할 수 없습니다.');return}modal(`<h2>${esc(member.name)} · ${d}</h2><form id="dayForm" class="entityform"><label>출결 상태<select name="status">${['','출석','결석','지각','조퇴'].map(s=>`<option value="${s}" ${records[key]===s?'selected':''}>${s||'미입력 (기록 삭제)'}</option>`).join('')}</select></label><button type="submit" class="primary">저장</button></form>`);$('#dayForm').onsubmit=e=>{e.preventDefault();const value=new FormData(e.target).get('status');if(transaction(()=>{management.audit(value?'출결 수정':'출결 삭제','days',key,records[key]||'',value);records[key]=value})){$('#dialog').close();render();toast('출결을 저장했습니다.')}}}
 
