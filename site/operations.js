@@ -279,8 +279,8 @@ bindManagement=function(page){
         adminSession=true;
         location.hash='dashboard';
       }catch(error){
-        $('#loginError').textContent=error.message;
-        button.disabled=false;
+        if($('#loginError'))$('#loginError').textContent=error.message;
+        const activeButton=$('#loginForm button[type="submit"]');if(activeButton)activeButton.disabled=false;
       }
     };
   }
