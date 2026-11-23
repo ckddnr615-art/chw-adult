@@ -2,7 +2,7 @@
 function writeProjectedPerformance_(entry,props){
  if(!Array.isArray(entry.reportStaff))return writePerformanceToTab_(entry,props);
  var targets=entry.reportStaff.filter(function(staff,index,rows){return rows.findIndex(function(row){return row.id===staff.id})===index});
- if(!targets.length||entry.checked&&targets.filter(function(target){return target.checked!==false}).length>1)throw Error('프로그램의 요일별 실적 담당자 한 명을 지정해 주세요.');
+ if(!targets.length||entry.checked&&targets.filter(function(target){return target.checked!==false}).length>1)throw Error('프로그램의 실적 담당자 한 명을 지정해 주세요. 참여자별 배정 방식은 참여자 배정 화면에서 설정하세요.');
  // Each copy has its own retry journal, while N retains the common performance key.
  targets.forEach(function(staff){
   var copy=Object.assign({},entry,{id:'staff-'+sharedHash_(JSON.stringify([entry.id,staff.id])),destinationStaff:staff,staff:staff.name,checked:entry.checked&&staff.checked!==false});

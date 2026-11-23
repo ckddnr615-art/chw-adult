@@ -504,3 +504,45 @@ test('참여자의 소속·사례관리 담당 변경은 원래 이력을 보존
  assert.equal(result.status,200);assert.equal(result.body.member.history.length,2);assert.equal(result.body.caseAssignments[0].staffId,staff.id);
  assert.equal(e.call('/api/team/member',{memberId:'person-1',before:{name:before.name},after:{name:'불완전'}}).status,400);
 });
+
+test('참여자별 담당 분배는 사례관리 담당과 무관하게 각 직원 시트에 맡은 인원만 기록한다',()=>{
+ const e=environment(),model=e.model(),first=model.data.staff[0];
+ const second=model.save('staff','',{name:'분배 담당 나'},'2026-10-29');
+ const person2=model.save('members','',{name:'다른 이용인',communityId:'community-1'},'2026-10-29');
+ model.save('programs','program-1',{facilitatorIds:[first.id,second.id]},'2026-10-29');
+ model.save('schedules','schedule-1',{facilitatorIds:[first.id,second.id],audienceMode:'individual',reportAssignmentMode:'participant',reportStaffByWeekday:{}},'2026-10-29');
+ model.assignParticipants('schedule-1',['person-1',person2.id],'2026-10-29','individual',{'person-1':first.id,[person2.id]:second.id});
+ model.assignCaseManager('person-1',second.id,'2026-10-29');model.assignCaseManager(person2.id,first.id,'2026-10-29');
+ e.props.set('SHEET_TAB_MAP','{}');e.login();assert.equal(e.call('/api/team/initialize',{management:model.data,records:{}}).status,200);
+ const check=id=>e.call('/api/team/checkin',{memberId:id,date:'2026-10-29',scheduleId:'schedule-1',programId:'program-1',requestId:crypto.randomUUID()});
+ assert.equal(check('person-1').status,200);assert.equal(check(person2.id).status,200);
+ const a=e.sheets.get(first.name+' 실적'),b=e.sheets.get(second.name+' 실적');assert.ok(a);assert.ok(b);
+ assert.equal(a.getLastRow(),2);assert.equal(b.getLastRow(),2);assert.equal(a.rows[1][0],model.find('members','person-1').name);assert.equal(b.rows[1][0],person2.name);
+ const state=e.call('/api/team/state',{},'GET').body;assert.equal(state.entries.filter(entry=>entry.checked).length,2);
+ assert.ok(state.entries.every(entry=>entry.reportStaff.length===1));assert.equal(state.entries.find(entry=>entry.memberId==='person-1').reportStaff[0].id,first.id);
+});
+
+test('참여자별 실적 담당이 없으면 다른 직원에게 대신 기록하지 않고 대기한다',()=>{
+ const e=environment(),model=e.model(),first=model.data.staff[0];
+ model.save('schedules','schedule-1',{audienceMode:'individual',reportAssignmentMode:'participant'},'2026-10-29');
+ model.data.enrollments.push({id:'missing-owner',scheduleId:'schedule-1',memberId:'person-1',from:'2026-10-29',to:'',active:true});
+ e.props.set('SHEET_TAB_MAP','{}');e.login();e.call('/api/team/initialize',{management:model.data,records:{}});
+ const result=e.call('/api/team/checkin',{memberId:'person-1',date:'2026-10-29',scheduleId:'schedule-1',programId:'program-1',requestId:crypto.randomUUID()});
+ assert.equal(result.status,200);assert.equal(result.body.reportReceipt.mappingMissing,true);assert.equal(e.sheets.has(first.name+' 실적'),false);
+});
+
+test('같은 날 실적 담당을 바꾼 후 출석을 재확인해도 두 직원에게 중복 기록되지 않는다',()=>{
+ const e=environment(),model=e.model(),first=model.data.staff[0],second=model.save('staff','',{name:'변경 받을 직원'},'2026-10-29');
+ model.save('programs','program-1',{facilitatorIds:[first.id,second.id]},'2026-10-29');
+ model.save('schedules','schedule-1',{facilitatorIds:[first.id,second.id],audienceMode:'individual',reportAssignmentMode:'participant'},'2026-10-29');
+ model.assignParticipants('schedule-1',['person-1'],'2026-10-29','individual',{'person-1':first.id});
+ e.props.set('SHEET_TAB_MAP','{}');e.login();e.call('/api/team/initialize',{management:model.data,records:{}});
+ const check=()=>e.call('/api/team/checkin',{memberId:'person-1',date:'2026-10-29',scheduleId:'schedule-1',programId:'program-1',requestId:crypto.randomUUID()});
+ assert.equal(check().status,200);
+ const state=e.call('/api/team/state',{},'GET').body,old=state.config.enrollments.find(row=>row.active!==false),next={...old,reportStaffId:second.id};
+ assert.equal(e.call('/api/team/config',{changes:[{type:'enrollments',id:old.id,before:old,after:next}]}).status,200);
+ assert.equal(check().status,200);
+ const latest=e.call('/api/team/state',{},'GET').body.entries.filter(entry=>entry.checked);
+ assert.equal(latest.length,1);assert.equal(latest[0].reportStaff[0].id,second.id);
+ assert.equal(e.sheets.get(second.name+' 실적').getLastRow(),2);
+});

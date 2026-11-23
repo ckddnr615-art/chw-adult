@@ -29,17 +29,18 @@
       const dated=daySchedules.filter(s=>this.find('schedules',s.id)?.date===d&&s.audienceMode==='individual');
       return this.list('members').filter(member=>rawEligible(schedule,member)&&(this.find('schedules',schedule.id)?.date===d||!dated.some(s=>s.start<schedule.end&&schedule.start<s.end&&rawEligible(s,member))));
     }
-    assignParticipants(scheduleId,memberIds,from,mode){
+    assignParticipants(scheduleId,memberIds,from,mode,reportOwners=null){
       let schedule=this.find('schedules',scheduleId);if(!schedule||schedule.active===false)throw Error('사용 중인 일정을 선택해 주세요.');
       if(!['community','individual'].includes(mode))throw Error('배정 방식을 확인해 주세요.');
       if(!/^\d{4}-\d{2}-\d{2}$/.test(from)||(schedule.validFrom&&from<schedule.validFrom)||(schedule.validTo&&from>schedule.validTo)||(schedule.date&&from!==schedule.date))throw Error('배정 적용일이 일정 기간과 맞지 않습니다.');
       const ids=[...new Set(memberIds)];if(ids.some(id=>!this.list('members').some(m=>m.id===id)))throw Error('사용 중인 참여자를 선택해 주세요.');
       if(mode==='individual'&&!ids.length)throw Error('참여자를 한 명 이상 선택해 주세요.');
+      if(schedule.reportAssignmentMode==='participant'){if(mode!=='individual')throw Error('참여자별 실적 담당은 참여자 개별 배정으로 설정해 주세요.');for(const memberId of ids){const owner=reportOwners&&reportOwners[memberId];if(!(schedule.facilitatorIds||[]).includes(owner)||!this.list('staff').some(staff=>staff.id===owner))throw Error('선택한 참여자마다 프로그램 실적 담당 직원 한 명을 지정해 주세요.')}}
       if(this.data.enrollments.some(e=>e.scheduleId===scheduleId&&e.active!==false&&e.from>from))throw Error('이미 예약된 미래 배정이 있습니다. 적용일을 확인해 주세요.');
       if(schedule.audienceMode!==mode&&!schedule.date){schedule=this.reviseSchedule(scheduleId,{audienceMode:mode},from);scheduleId=schedule.id}
       const before={mode:schedule.audienceMode,enrollments:clone(this.data.enrollments.filter(e=>e.scheduleId===scheduleId))};
       for(const e of this.data.enrollments.filter(e=>e.scheduleId===scheduleId&&e.active!==false&&(!e.to||e.to>=from))){if(e.from>=from)e.active=false;else e.to=ManagementStore.addDays(from,-1)}
-      for(const memberId of ids)this.data.enrollments.push({id:uid(),scheduleId,memberId,from,to:'',active:true});
+      for(const memberId of ids)this.data.enrollments.push({id:uid(),scheduleId,memberId,from,to:'',active:true,...(schedule.reportAssignmentMode==='participant'?{reportStaffId:reportOwners[memberId]}:{})});
       schedule.audienceMode=mode;this.audit('참여자 배정','schedules',scheduleId,before,{mode,memberIds:ids,from});
     }
     setDayOverride(scheduleId,d,fields){
@@ -158,6 +159,8 @@
       }
     }
     static validateReportAssignments(item){
+      if(item.reportAssignmentMode!==undefined&&!['weekday','participant'].includes(item.reportAssignmentMode))throw Error('실적 배정 방식을 확인해 주세요.');
+      if(item.reportAssignmentMode==='participant'&&item.audienceMode&&item.audienceMode!=='individual')throw Error('참여자별 실적 담당은 참여자 개별 배정으로 설정해 주세요.');
       const map=item.reportStaffByWeekday;
       if(map!==undefined){
         if(!map||Array.isArray(map)||typeof map!=='object')throw Error('요일별 실적 담당을 확인해 주세요.');
@@ -206,8 +209,15 @@
       const dated=resolved.filter(s=>this.find('schedules',s.id)?.date===d&&s.audienceMode!=='individual');
       return resolved.filter(s=>this.find('schedules',s.id)?.date===d||!dated.some(one=>one.communityId===s.communityId&&one.start<s.end&&s.start<one.end));
     }
+    reportOwnerFor(schedule,memberId,d){
+      if(schedule.reportAssignmentMode!=='participant')return schedule.reportStaffId||'';
+      if(schedule.isException&&schedule.reportStaffId)return schedule.reportStaffId;
+      const enrollment=this.data.enrollments.filter(e=>e.active!==false&&e.scheduleId===schedule.id&&e.memberId===memberId&&e.from<=d&&(!e.to||e.to>=d)).sort((a,b)=>a.from.localeCompare(b.from)).slice(-1)[0];
+      const owner=enrollment&&enrollment.reportStaffId;
+      return owner&&(schedule.facilitatorIds||[]).includes(owner)?owner:'';
+    }
     entryMatchesSchedule(entry,schedule){
-      return entry.scheduleId===schedule.id&&entry.programId===schedule.program.id&&
+      return (schedule.reportAssignmentMode!=='participant'||entry.reportAssignmentMode==='participant'&&(entry.reportStaff?.[0]?.id||'')===this.reportOwnerFor(schedule,entry.memberId,entry.date))&&entry.scheduleId===schedule.id&&entry.programId===schedule.program.id&&
         entry.areaId===schedule.area.id&&entry.area===schedule.area.name&&
         entry.program===schedule.program.name&&entry.staff===schedule.program.staff&&
         entry.start===schedule.start&&entry.end===schedule.end;
@@ -220,8 +230,10 @@
       if(!entry&&(!member.active||!allowUnassigned&&!this.eligibleMembers(schedule,d).some(m=>m.id===memberId)))throw Error('해당 날짜 소속과 프로그램 커뮤니티가 다릅니다.');
       const before=clone(entry||null);
       if(!entry){const communityId=this.data.days[d+':'+memberId]?.communityId||this.memberGroupAt(member,d);entry={id:uid(),memberId,scheduleId,date:d,name:member.name,communityId,community:this.communityName(communityId),areaId:schedule.area.id,area:schedule.area.name,programId:schedule.program.id,program:schedule.program.name,staff:schedule.program.staff,facilitatorIds:clone(schedule.facilitatorIds||[]),caseManagerId:this.caseManagerAt(memberId,d),start:schedule.start,end:schedule.end,version:0,createdAt:new Date().toISOString()};
-        if(this.data.days[d+':'+memberId]?.reportMode==='program'){
-          entry.reportStaff=schedule.reportStaffId?[{id:schedule.reportStaffId,name:this.find('staff',schedule.reportStaffId)?.name||''}]:[];
+        if(this.data.days[d+':'+memberId]?.reportMode==='program'||schedule.reportAssignmentMode==='participant'){
+          const owner=this.reportOwnerFor(schedule,memberId,d);
+          entry.reportAssignmentMode=schedule.reportAssignmentMode||'weekday';
+          entry.reportStaff=owner?[{id:owner,name:this.find('staff',owner)?.name||''}]:[];
         }
         this.data.entries.push(entry)}
       entry.checked=!!checked;entry.version++;entry.sync='pending';entry.updatedAt=new Date().toISOString();entry.error='';this.audit(checked?'참여 체크':'참여 취소','entries',entry.id,before,entry);return entry;
@@ -259,6 +271,7 @@
       const current=previous==='출석'?(day.participation||'both'):'';
       if(!day.participationLocked)day.participation=current&&current!==part?'both':part;
       if(!day.reportMode)day.reportMode=this.data.entries.some(e=>e.date===d&&e.memberId===member.id)?'area':'program';
+      if(schedule.reportAssignmentMode==='participant')for(const old of this.data.entries.filter(e=>e.memberId===member.id&&e.scheduleId===schedule.id&&e.date===d&&e.checked&&!this.entryMatchesSchedule(e,schedule)))this.deleteEntry(old.id);
       const entry=this.setParticipation(member.id,schedule.id,d,true,{matchCurrent:true});
       if(day.reportMode==='program')entry.reportMode='program';
       entry.source='kiosk_program';

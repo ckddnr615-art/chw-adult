@@ -15,23 +15,23 @@ function programAttendanceGroups(store, records, day, staffId=''){
   for(const schedule of store.schedulesOn(day)){
     const row=session({scheduleId:schedule.id,programId:schedule.program.id,name:schedule.program.name,
       area:schedule.area.name,staff:schedule.program.staff,start:schedule.start,end:schedule.end,
-      staffIds:schedule.facilitatorIds||[],scheduled:true});
+      staffIds:schedule.facilitatorIds||[],reportAssignmentMode:schedule.reportAssignmentMode,scheduled:true});
     for(const member of store.eligibleMembers(schedule,day)){
-      row.rows.set(member.id,{memberId:member.id,name:member.name,dayStatus:records[day+':'+member.id]||''});
+      row.rows.set(member.id,{memberId:member.id,name:member.name,reportOwnerId:store.reportOwnerFor(schedule,member.id,day),dayStatus:records[day+':'+member.id]||''});
     }
   }
   for(const entry of store.data.entries.filter(item=>item.date===day)){
     const row=session({scheduleId:entry.scheduleId,programId:entry.programId,name:entry.program,
       area:entry.area,staff:entry.staff,start:entry.start,end:entry.end,
-      staffIds:entry.facilitatorIds||[],scheduled:false});
+      staffIds:entry.facilitatorIds||[],reportAssignmentMode:entry.reportAssignmentMode,scheduled:false});
     const existing=row.rows.get(entry.memberId);
     if(existing?.entry?.checked&&!entry.checked)continue;
     row.rows.set(entry.memberId,{memberId:entry.memberId,name:entry.name,
-      dayStatus:records[day+':'+entry.memberId]||'',entry});
+      dayStatus:records[day+':'+entry.memberId]||'',reportOwnerId:entry.reportStaff?.[0]?.id||existing?.reportOwnerId||'',entry});
   }
   return [...groups.values()].map(group=>{
     const sessions=group.sessions.filter(item=>!staffId||item.staffIds.includes(staffId))
-      .sort((a,b)=>a.start.localeCompare(b.start)).map(item=>({...item,rows:[...item.rows.values()]
+      .sort((a,b)=>a.start.localeCompare(b.start)).map(item=>({...item,rows:[...item.rows.values()].filter(row=>!staffId||item.reportAssignmentMode!=='participant'||row.reportOwnerId===staffId)
         .sort((a,b)=>a.name.localeCompare(b.name,'ko'))}));
     const participants=new Set(sessions.flatMap(item=>item.rows.filter(row=>row.entry?.checked).map(row=>row.memberId)));
     return {...group,sessions,count:participants.size};

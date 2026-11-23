@@ -16,24 +16,28 @@ function bindTimeFields(){
   start.onchange=end.onchange=sync;
 }
 function reportWeekdayFields(){
- return '<fieldset class="report-weekdays"><legend>요일별 실적 담당자</legend><p class="formhint">운영하는 요일마다 실적을 기록할 직원 한 명을 선택하세요.</p>'+[1,2,3,4,5,6,0].map(day=>'<label data-report-day-label="'+day+'">'+'일월화수목금토'[day]+'요일<select name="reportStaffDay'+day+'" data-report-day="'+day+'"></select></label>').join('')+'</fieldset>';
+ return '<fieldset class="report-weekdays"><legend>실적 담당 배정</legend><label>실적 배정 방식<select name="reportAssignmentMode" id="reportAssignmentMode"><option value="weekday">요일별 한 직원에게 기록</option><option value="participant">참여자별 담당 직원에게 나눠 기록</option></select></label><p class="formhint" id="reportAssignmentHint">운영하는 요일마다 실적을 기록할 직원 한 명을 선택하세요.</p>'+[1,2,3,4,5,6,0].map(day=>'<label data-report-day-label="'+day+'">'+'일월화수목금토'[day]+'요일<select name="reportStaffDay'+day+'" data-report-day="'+day+'"></select></label>').join('')+'</fieldset>';
 }
 function bindReportWeekdays(form,initial,mode){
  const remembered={...(initial.reportStaffByWeekday||{})};
+ const ownerMode=form.querySelector('[name="reportAssignmentMode"]');ownerMode.value=initial.reportAssignmentMode||'weekday';
  const update=()=>{
   const ids=[...form.querySelectorAll('[name="facilitatorId"]:checked')].map(input=>input.value);
+  const participant=ownerMode.value==='participant';
+  form.querySelector('#reportAssignmentHint').textContent=participant?'프로그램 저장 후 참여자 배정 화면에서 각 이용인의 실적 담당 직원을 한 명씩 선택하세요. 담당자가 맡은 인원만 해당 직원 시트에 기록됩니다.':'운영하는 요일마다 실적을 기록할 직원 한 명을 선택하세요.';
+  const audience=form.querySelector('[name="audienceMode"]');if(participant&&audience&&audience.value!=='individual'){audience.value='individual';audience.dispatchEvent(new Event('change',{bubbles:true}))}
   const weekly=mode(),day=form.querySelector('[name="date"]')?.value;
   const days=weekly?[...form.querySelectorAll('[name="weekday"]:checked')].map(input=>Number(input.value)):day?[new Date(day+'T12:00:00Z').getUTCDay()]:[];
   form.querySelectorAll('[data-report-day]').forEach(select=>{
    const weekday=Number(select.dataset.reportDay),value=remembered[weekday]||'';
    const chosen=ids.includes(value)?value:ids.length===1?ids[0]:'';
    select.innerHTML='<option value="">담당자를 선택해 주세요</option>'+opts(management.list('staff').filter(staff=>ids.includes(staff.id)),chosen);
-   select.disabled=!days.includes(weekday);select.required=!select.disabled;
+   select.disabled=participant||!days.includes(weekday);select.required=!select.disabled;
    select.closest('label').hidden=select.disabled;
   });
  };
  form.querySelectorAll('[data-report-day]').forEach(select=>select.onchange=()=>{remembered[select.dataset.reportDay]=select.value});
- form.addEventListener('change',event=>{if(event.target.matches('[name="facilitatorId"],[name="weekday"],[name="date"],[name="repeatMode"],#registrationRepeat'))update()});
+ form.addEventListener('change',event=>{if(event.target.matches('[name="facilitatorId"],[name="weekday"],[name="date"],[name="repeatMode"],[name="reportAssignmentMode"],#registrationRepeat'))update()});
  update();
 }
 function collectReportAssignments(fd){
@@ -86,7 +90,8 @@ function openScheduleEditor(id='',context={}){
   bindReportWeekdays($('#entityForm'),item,()=>($('#repeatMode')?.value||mode)==='weekly');
   $('#scheduleProgram').onchange=e=>{const next=management.find('programs',e.target.value);document.querySelectorAll('#entityForm [name="facilitatorId"]').forEach(c=>c.checked=next?.facilitatorIds?.includes(c.value)||false)};
   $('#entityForm').onsubmit=e=>{e.preventDefault();const fd=new FormData(e.target),repeat=fd.get('repeatMode')==='weekly',from=fd.get('validFrom')||date;
-    const fields={programId:fd.get('programId'),date:repeat?'':fd.get('date'),weekdays:repeat?fd.getAll('weekday').map(Number):[],validFrom:repeat?from:'',validTo:'',start:fd.get('start'),end:fd.get('end'),location:fd.get('location'),facilitatorIds:fd.getAll('facilitatorId'),reportStaffByWeekday:collectReportAssignments(fd),audienceMode:fd.get('audienceMode'),communityId:fd.get('audienceMode')==='community'?fd.get('communityId'):''};
+    const fields={programId:fd.get('programId'),date:repeat?'':fd.get('date'),weekdays:repeat?fd.getAll('weekday').map(Number):[],validFrom:repeat?from:'',validTo:'',start:fd.get('start'),end:fd.get('end'),location:fd.get('location'),facilitatorIds:fd.getAll('facilitatorId'),reportAssignmentMode:fd.get('reportAssignmentMode')||'weekday',reportStaffByWeekday:collectReportAssignments(fd),audienceMode:fd.get('audienceMode'),communityId:fd.get('audienceMode')==='community'?fd.get('communityId'):''};
+    if(fields.reportAssignmentMode==='participant'&&team.active&&!team.participantReportOwners){$('#formError').textContent='참여자별 실적 담당 기능을 위해 Apps Script 서버를 먼저 업데이트해 주세요.';return}
     if(fields.audienceMode==='community'&&!fields.communityId){$('#formError').textContent='배정 대상 소속을 선택해 주세요.';return}if(!fields.facilitatorIds.length){$('#formError').textContent='진행 직원을 한 명 이상 선택해 주세요.';return}
     const backup=JSON.stringify(management.data);
     try{let savedSchedule;if(id&&repeat)savedSchedule=management.reviseSchedule(id,fields,from);else savedSchedule=management.save('schedules',id,fields,date);if(!persist())throw Error('저장하지 못했습니다. 입력을 유지합니다.');$('#dialog').close();render();if(!id&&context.assignAfterSave&&fields.audienceMode==='individual'){openAssignments(savedSchedule.id,fields.date||fields.validFrom||date);toast('일정을 저장했습니다. 참여자를 선택해 주세요.')}else toast('일정을 저장했습니다. 이전 실적은 유지됩니다.')}
@@ -191,7 +196,7 @@ function updateProgramWithSchedule(store,programId,scheduleId,programFields,sche
   if(!old)schedule=store.save('schedules','',{...scheduleFields,programId},today);
   else if(old.date)schedule=store.save('schedules',old.id,{...scheduleFields,programId},today);
   else{
-   const keys=['weekdays','start','end','location','facilitatorIds','audienceMode','communityId','validTo','reportStaffByWeekday'];
+   const keys=['weekdays','start','end','location','facilitatorIds','audienceMode','communityId','validTo','reportStaffByWeekday','reportAssignmentMode'];
    const changed=keys.some(k=>JSON.stringify(old[k]??(k==='validTo'?'':null))!==JSON.stringify(scheduleFields[k]??(k==='validTo'?'':null)));
    schedule=changed?store.reviseSchedule(old.id,{...scheduleFields,programId},scheduleFields.validFrom):old;
    if(changed&&scheduleFields.validTo)schedule=store.save('schedules',schedule.id,{validTo:scheduleFields.validTo},today);
@@ -219,13 +224,14 @@ function openProgramRegistration(programId='',selectedScheduleId='',draft=null){
   e.preventDefault();const fd=new FormData(e.target),weekly=$('#registrationRepeat').value==='weekly',staffIds=fd.getAll('facilitatorId'),before=JSON.stringify(management.data);
   $('#formError').textContent='';
   if(team.active&&!team.weekdayReportTabs){$('#formError').textContent='요일별 담당 배정을 위해 Apps Script 서버를 먼저 업데이트해 주세요.';return}
+  if(fd.get('reportAssignmentMode')==='participant'&&team.active&&!team.participantReportOwners){$('#formError').textContent='참여자별 실적 담당 기능을 위해 Apps Script 서버를 먼저 업데이트해 주세요.';return}
   if(!staffIds.length){$('#formError').textContent='프로그램 진행 직원을 한 명 이상 선택해 주세요.';return}
   if(weekly&&fd.get('validTo')&&fd.get('validTo')<fd.get('validFrom')){$('#formError').textContent='종료일은 시작일 이후로 설정해 주세요.';return}
   try{
    const result=(editing?(store,pf,sf,today)=>updateProgramWithSchedule(store,programId,selectedSchedule?.id||'',pf,sf,today):saveProgramWithSchedule)(management,{name:fd.get('name'),areaId:fd.get('areaId'),facilitatorIds:staffIds},{date:weekly?'':fd.get('date'),weekdays:weekly?fd.getAll('weekday').map(Number):[],validFrom:weekly?fd.get('validFrom'):'',validTo:weekly?fd.get('validTo'):'',start:fd.get('start'),end:fd.get('end'),location:fd.get('location'),facilitatorIds:staffIds,reportStaffByWeekday:collectReportAssignments(fd),audienceMode:fd.get('audienceMode'),communityId:fd.get('audienceMode')==='community'?fd.get('communityId'):''},date);
    if(!persist())throw Error('저장하지 못했습니다. 입력을 유지합니다.');
    $('#dialog').close();assignmentStaffFilter='';programAreaFilter='';programStaffFilter='';location.hash='programs';
-   if(e.submitter?.value==='assign'||result.schedule.audienceMode==='individual'&&(!editing||!selectedSchedule||selectedSchedule.audienceMode!=='individual'))openAssignments(result.schedule.id,result.schedule.date||result.schedule.validFrom||date);
+   if(e.submitter?.value==='assign'||result.schedule.reportAssignmentMode==='participant'||result.schedule.audienceMode==='individual'&&(!editing||!selectedSchedule||selectedSchedule.audienceMode!=='individual'))openAssignments(result.schedule.id,result.schedule.date||result.schedule.validFrom||date);
    render();toast('프로그램과 일정을 저장했습니다.'+(!editing&&result.schedule.audienceMode==='individual'?' 참여자를 선택해 주세요.':''));
   }catch(error){management.data=JSON.parse(before);$('#formError').textContent=error.message}
  };

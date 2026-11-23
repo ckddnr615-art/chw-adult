@@ -98,3 +98,18 @@ test('운영 중인 반복 일정을 요일별로 나눠도 적용일 전 일정
  const count=f.store.schedulesOn('2026-11-11').length,rows=f.store.splitScheduleWeekdays(base.id,'2026-11-09');
  assert.equal(rows.length,3);assert.equal(f.store.find('schedules',base.id).validTo,'2026-11-08');assert.equal(f.store.schedulesOn('2026-11-11').length,count);assert.ok(rows.every(s=>s.validTo==='2026-12-31'));
 });
+
+test('참여자별 실적 담당은 한 명만 선택하며 적용일 전후 담당 이력을 유지한다',()=>{
+ const f=fixture(),first=f.program.facilitatorIds[0],second=f.store.save('staff','',{name:'두 번째 직원'},'2026-10-29').id;
+ const member=f.store.save('members','',{name:'분배 이용인',communityId:f.store.list('communities')[0].id},'2026-10-29');
+ const schedule=context.saveProgramWithSchedule(f.store,{...f.program,facilitatorIds:[first,second]},{...f.schedule,facilitatorIds:[first,second],reportAssignmentMode:'participant'},'2026-10-29').schedule;
+ assert.throws(()=>f.store.assignParticipants(schedule.id,[member.id],'2026-11-02','individual',{}),/한 명/);
+ f.store.assignParticipants(schedule.id,[member.id],'2026-11-02','individual',{[member.id]:first});
+ f.store.assignParticipants(schedule.id,[member.id],'2026-11-09','individual',{[member.id]:second});
+ assert.equal(f.store.reportOwnerFor(schedule,member.id,'2026-11-03'),first);assert.equal(f.store.reportOwnerFor(schedule,member.id,'2026-11-10'),second);
+ assert.throws(()=>f.store.assignParticipants(schedule.id,[member.id],'2026-11-10','individual',{[member.id]:'not-a-program-staff'}),/한 명/);
+ const attendance=fs.readFileSync(require.resolve('../site/program-attendance.js'),'utf8');
+ const groups=vm.runInNewContext(attendance.slice(0,attendance.indexOf('function staffScheduleTable('))+';programAttendanceGroups');
+ const own=groups(f.store,{},'2026-11-11',second).find(group=>group.id===schedule.programId);assert.equal(own.sessions.flatMap(session=>session.rows).length,1);
+ const other=groups(f.store,{},'2026-11-11',first).find(group=>group.id===schedule.programId);assert.equal(other.sessions.flatMap(session=>session.rows).length,0);
+});

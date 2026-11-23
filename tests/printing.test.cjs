@@ -32,3 +32,19 @@ test('담당자 변경 전후의 출석부가 날짜 기준으로 나뉘고 미�
  assert.equal(after[8],null);assert.equal(after[9].mark,'O');
  assert.equal(groups.find(g=>g.id==='unassigned').rows[0].member.id,'b');
 });
+
+test('월중 신규 등록자도 등록 월 전체의 주말과 공휴일을 표시하고 등록 전 결석을 만들지 않는다',()=>{
+ const Store=require('../site/domain.js'),source=fs.readFileSync(require.resolve('../site/admin.js'),'utf8');
+ const register=vm.runInNewContext(source.slice(source.indexOf('function caseRegisterGroups('),source.indexOf('function visibleRegisterGroups('))+';caseRegisterGroups',{monthDays:()=>30});
+ const store=new Store(Store.seed(['소속'],[],[['10:00','11:30','프로그램','소속','활동실','담당자']],{}));
+ const member=store.save('members','',{name:'신규 참여자',communityId:store.list('communities')[0].id},'2026-11-20');
+ const staff=store.data.staff[0];store.assignCaseManager(member.id,staff.id,'2026-11-20');
+ const originalHoliday=store.holidayName.bind(store);store.holidayName=day=>day==='2026-11-02'?'휴무일':originalHoliday(day);
+ const attendance={['2026-11-20:'+member.id]:'출석'};
+ const snapshot=JSON.stringify(store.data),records=JSON.stringify(attendance),groups=register(store,attendance,'2026-11','2026-11-23');
+ const cells=groups.find(g=>g.id===staff.id).rows[0].cells;
+ assert.equal(cells.length,30);assert.equal(cells[0].mark,'휴');assert.equal(cells[1].mark,'휴');assert.equal(cells[6].mark,'휴');assert.equal(cells[7].mark,'휴');
+ assert.equal(cells[2].mark,'');assert.equal(cells[2].readOnly,true);assert.equal(cells[19].mark,'/');assert.equal(cells[20].mark,'휴');
+ assert.equal(JSON.stringify(store.data),snapshot);assert.equal(JSON.stringify(attendance),records);
+ assert.equal(register(store,attendance,'2026-10','2026-11-23').length,0);
+});

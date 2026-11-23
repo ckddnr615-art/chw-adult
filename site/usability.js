@@ -226,6 +226,7 @@ bindManagement=function(page){previousSessionBind(page);updateAdminSessionClock(
 
 const programStaffDrafts=new Map();
 function programStaffQuickEditor(schedule){
+ if(schedule.reportAssignmentMode==='participant')return `<div class="program-staff-quick"><strong>참여자별 담당 분배</strong><p class="formhint">각 담당 직원에게 맡은 이용인의 실적만 기록합니다.</p><button class="secondary" data-assign="${esc(schedule.id)}">참여자별 담당 설정</button></div>`;
  const draft=programStaffDrafts.get(schedule.id),program=management.find('programs',schedule.programId),ids=schedule.facilitatorIds||program?.facilitatorIds||[];
  const days=schedule.date?[new Date(schedule.date+'T12:00:00Z').getUTCDay()]:schedule.weekdays;
  return `<div class="program-staff-quick" data-quick-schedule="${esc(schedule.id)}">${days.map(day=>{
