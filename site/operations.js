@@ -155,6 +155,7 @@ function openConfigConflict(){
   };
 }
 function showTeamStatus(){
+  syncSharedRefreshControl();
   document.querySelector('#teamStatus')?.remove();if(!$('#main'))return;
   const text=team.loading?'Google 공동 저장 확인 중…':team.error?'저장 확인 필요 · '+team.error:team.saving?'공유 서버에 저장 중…':team.active?`Google 공동 저장 연결됨 · 프로그램 실적 ${team.googleConfigured?'자동 전송 설정됨':'프로그램 담당 직원 지정 대기'}`:team.configured?'공유 저장소가 비어 있습니다. 관리자 로그인 후 현재 자료로 시작해 주세요.':'브라우저 저장 모드 · 다른 기기 공유는 배포 서버 연결 후 가능합니다.';
   const node=document.createElement('section');node.id='teamStatus';node.className='team-status'+(team.error?' error':'');node.setAttribute('role','status');node.innerHTML=`<span>${esc(text)}</span>${team.configured&&!team.initialized&&adminSession?'<button class="secondary" id="initializeTeam">현재 자료로 공유 저장소 시작</button>':''}${team.error?'<button class="secondary" id="reloadTeam">서버 자료 다시 불러오기</button>':''}`;$('#main').prepend(node);
@@ -304,6 +305,36 @@ bindManagement=function(page){
 managementPages.workspace=function(){return heading('Google 공동 저장','공동 자료와 출결은 Google Sheets에, 사진 축소본은 Drive에 보관합니다.')+`<section class="panel"><h2>${team.active?'Google 공동 저장 연결됨':'Google 연결 설정 필요'}</h2><p>프로그램 실적: <b>${team.googleConfigured?'프로그램 담당 직원별 탭 자동 반영':'프로그램 담당 직원 지정 필요'}</b></p><p class="notice">사진은 Drive 비공개 폴더에 저장하며, 프로그램 담당 직원의 실적 탭을 자동 생성합니다. 운영 요일에 지정한 실적 담당자 한 명의 탭에 기록합니다.</p><div class="actions"><button class="secondary" id="backupTeamData">운영 자료 백업</button><button class="secondary" id="refreshTeamData">공동 자료 새로 확인</button></div><p><a class="textbutton" href="연결설명서.html" target="_blank" rel="noopener">Google 연결 설명서 ↗</a></p></section>`};
 managementPages.settings=function(){return heading('환경 설정','운영 환경과 자료 보관 상태를 확인합니다. 배너 문구·사진·글자 크기는 화면 설정에서 변경합니다.')+`<section class="panel"><h2>운영 환경</h2><p>업무 시간대: Asia/Seoul</p><p>Google 공동 저장: ${team.active?'연결됨':'연결 확인 필요'}</p><p>Google Sheets: ${team.googleConfigured?'서버 전송 설정됨':'미연결'}</p><a href="#appearance" class="primary">화면 설정 열기 ↗</a></section>`};
 managementPages.performance=attendance;
+let sharedRefreshBusy=false;
+function sharedRefreshBlocked(){
+ return !sharedScreenCanRefresh()||(typeof memberRowDrafts!=='undefined'&&memberRowDrafts.size>0)||(typeof programStaffDrafts!=='undefined'&&programStaffDrafts.size>0);
+}
+function syncSharedRefreshControl(){
+ const header=document.querySelector('.headeractions');if(!header)return;
+ let button=$('#refreshSharedChanges');
+ if(!adminSession||document.body.classList.contains('participant-mode')){button?.remove();return}
+ if(!button){button=document.createElement('button');button.id='refreshSharedChanges';button.type='button';button.className='secondary';button.onclick=refreshSharedChanges;header.prepend(button)}
+ button.disabled=sharedRefreshBusy||team.loading;button.textContent=sharedRefreshBusy?'최신화 중…':'↻ 변경 최신화';button.title='다른 직원이 저장한 최신 일정·출결·운영 정보를 불러옵니다.';
+}
+async function refreshSharedChanges(){
+ if(sharedRefreshBusy)return;
+ if(configPending||configSaving||team.saving){toast(team.error||'저장 중인 변경이 있습니다. 저장을 완료한 뒤 최신화해 주세요.');return}
+ if(sharedRefreshBlocked()){toast('입력 중인 내용을 저장하거나 취소한 뒤 최신화해 주세요.');return}
+ sharedRefreshBusy=true;syncSharedRefreshControl();
+ try{
+  const response=await fetch('/api/team/status',{credentials:'same-origin'}),state=await response.json();
+  if(!response.ok||state.service!=='ch-team-api')throw Error(state.error||'공동 저장 연결을 확인해 주세요.');
+  if(!state.authenticated)throw Error('관리자 로그인 시간이 만료되었습니다. 다시 로그인해 주세요.');
+  if(!state.initialized)throw Error('공동 저장소 최초 준비가 필요합니다.');
+  Object.assign(team,state);
+  // An edit can start while the network request is in flight.
+  if(configPending||configSaving||sharedRefreshBlocked())throw Error('입력 중인 내용을 유지했습니다. 저장하거나 취소한 뒤 최신화해 주세요.');
+  const page=location.hash.split('/')[0],month=page==='#reports'?reportMonth:page==='#attendance'?selectedDate.slice(0,7):date.slice(0,7);
+  const loaded=await loadTeamMonth(month,true);if(!loaded)throw Error('최신 자료를 확인하지 못했습니다.');
+  if(sharedRefreshBlocked()){toast('최신 자료를 확인했습니다. 입력 중인 화면은 유지합니다.');return}
+  team.error='';render();toast('다른 직원이 저장한 최신 변경을 반영했습니다.');
+ }catch(error){toast(error.message)}finally{sharedRefreshBusy=false;syncSharedRefreshControl()}
+}
 const initialHash=location.hash;
 async function bootTeam(){try{const response=await fetch('/api/team/status',{credentials:'same-origin'});if(!response.ok)throw Error();const status=await response.json();if(status.service!=='ch-team-api')throw Error();Object.assign(team,status);team.active=false;if(team.initialized){adminSession=!!team.authenticated;await loadTeamMonth(date.slice(0,7),true);if(adminSession&&initialHash!=='#login')history.replaceState(null,'',initialHash||'#kiosk')}}catch{team.configured=true;team.error='Google 공동 저장 연결 설정을 확인해 주세요. google-config.js의 웹앱 주소와 Apps Script 배포를 확인하세요.';adminSession=false}finally{team.loading=false;render()}}
 const teamBoot=bootTeam();
