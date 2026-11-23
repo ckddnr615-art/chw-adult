@@ -257,3 +257,15 @@ body.participant-mode dialog:has(.kiosk-photo-grid){width:min(720px,calc(100% - 
  #assignmentOwnerCount{margin:0;font-size:15px;color:#345591;line-height:1.7}
  @media(max-width:600px){.assignment-picker .member-checks{grid-template-columns:1fr;max-height:42dvh}.assignment-owner-bulk>button{width:100%}}
 }
+/* One readable hierarchy for programme dates, form labels and register marks. */
+@media screen{
+ body:not(.participant-mode) .program-period{font-size:16px;font-weight:400;line-height:1.7;letter-spacing:0;color:#475b72;font-variant-numeric:tabular-nums;white-space:normal;margin-top:8px}
+ body:not(.participant-mode) .integrated-program-table th:nth-child(3){min-width:240px}
+ body:not(.participant-mode) .program-staff-quick label{font-size:16px;font-weight:400;line-height:1.6}
+ body:not(.participant-mode) .program-staff-quick .formhint{font-size:15px}
+ body:not(.participant-mode) input:is([type=date],[type=month],[type=time]){font-family:inherit;font-size:16px;font-weight:400;font-variant-numeric:tabular-nums;letter-spacing:0;min-height:46px}
+ body:not(.participant-mode) .monthly-grid td,body:not(.participant-mode) .monthly-grid .daycell{font-family:inherit;font-size:20px;font-weight:700;line-height:1.3;letter-spacing:0;color:#263f60}
+ body:not(.participant-mode) .monthly-grid tbody th[scope=row]{font-size:17px;font-weight:400;line-height:1.6}
+ body:not(.participant-mode) .monthly-grid thead th{font-size:17px;font-weight:700;line-height:1.5}
+ body:not(.participant-mode) .monthly-grid .register-staff th:first-child{font-size:18px;font-weight:700;line-height:1.5}
+}

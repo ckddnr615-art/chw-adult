@@ -8,3 +8,7 @@
 .staff-one-page .cancelled-occurrences{margin-top:2mm}.staff-one-page .cancelled-occurrences h3{font-size:9pt;margin:0 0 1mm}.staff-one-page .cancelled-occurrences>div{font-size:7pt}.staff-one-page .schedule-warning{font-size:7pt}
 
 .monthly-grid .register-staff th:first-child{width:auto;text-align:left;padding-left:2mm;background:#dce8f6}
+/* Read-only holiday cells and editable marks use the same type in exported registers. */
+.monthly-grid td,.monthly-grid .daycell{font-family:inherit;font-size:9pt;font-weight:700;line-height:1.4;letter-spacing:0}
+.monthly-grid tbody th[scope=row]{font-size:9pt;font-weight:400}
+.monthly-grid .register-staff th:first-child{font-size:10pt;font-weight:700}

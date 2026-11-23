@@ -27,8 +27,9 @@
   font-style: normal;
   font-display: swap;
 }
+:root { --font-ui: "Seoul Alrim", "Malgun Gothic", sans-serif; }
 body {
-  font-family: "Seoul Alrim", "Malgun Gothic", sans-serif;
+  font-family: var(--font-ui);
   font-weight: 400;
   font-synthesis: none;
 }
@@ -40,3 +41,6 @@ h1, h2, h3 { font-weight: 800; }
 .primary, .secondary, .groupchoice b, .participant-mode .personcard b { font-weight: 700; }
 .dateclock #todayDate { font-weight: 700; }
 .dateclock #liveClock, .metric strong { font-weight: 800; }
+
+button, input, select, textarea, table, time, output, legend { font-family: inherit; }
+input[type="date"]::-webkit-datetime-edit, input[type="month"]::-webkit-datetime-edit, input[type="time"]::-webkit-datetime-edit { font-family: inherit; font-size: inherit; font-weight: inherit; }
