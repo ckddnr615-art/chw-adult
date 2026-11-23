@@ -217,7 +217,7 @@ function sharedRpc(request,origin,channel){
   var staff=staffId&&config?(config.staff||[]).find(function(person){return person.id===staffId&&person.active!==false}):null;
   if(staffId&&!staff)admin=false;
   var actor=staff?staff.name:admin?'공용 관리자':'참여자 출석';
-  if(path==='/api/team/status')return sharedReply_({service:'ch-team-api',configured:true,initialized:manifest.initialized,authenticated:admin,staffId:staff?staff.id:'',googleConfigured:!!sharedProps_().getProperty('SPREADSHEET_ID'),staffReportTabs:true,weekdayReportTabs:true,participantReportOwners:true,memberPatch:true,participationPeriods:true,programCheckin:true,calendarNotes:true,calendarEntries:true,local:false,backend:'google'});
+  if(path==='/api/team/status')return sharedReply_({service:'ch-team-api',configured:true,initialized:manifest.initialized,authenticated:admin,staffId:staff?staff.id:'',googleConfigured:!!sharedProps_().getProperty('SPREADSHEET_ID'),staffReportTabs:true,weekdayReportTabs:true,participantReportOwners:true,memberPatch:true,caseManagerBatch:true,participationPeriods:true,programCheckin:true,calendarNotes:true,calendarEntries:true,local:false,backend:'google'});
   if(path==='/api/integration-status')return sharedReply_({service:'ch-performance-api',configured:sharedReportsConfigured_(),authenticated:admin});
   if(path.startsWith('/api/team/photos/')||path==='/api/team/photo')return sharedPhoto_(book,request,admin);
   if(path==='/api/team/state'){
@@ -286,6 +286,22 @@ function sharedRpc(request,origin,channel){
    return sharedReply_(Object.assign({},result,{revision:manifest.revision,reportReceipt:sharedReportReceipt_(month,member.id,date)}));
   }
   if(!admin)return sharedReply_({error:'관리자 인증이 필요합니다.'},401);
+  if(path==='/api/team/case-managers'&&request.method==='POST'){
+   if(!manifest.initialized||!config)return sharedReply_({error:'공동 저장소를 먼저 준비해 주세요.'},409);
+   if(!Array.isArray(input.members)||!input.members.length||input.members.length>200||typeof input.staffId!=='string')return sharedReply_({error:'변경할 참여자와 사례관리 담당을 확인해 주세요.'},400);
+   var model=sharedModel_(config,{days:{},entries:[]}),ids=[],conflicts=[];
+   if(input.staffId&&!model.list('staff').some(function(staff){return staff.id===input.staffId}))return sharedReply_({error:'사용 중인 사례관리 담당 직원을 선택해 주세요.'},400);
+   for(var choice of input.members){
+    if(!choice||typeof choice.memberId!=='string'||typeof choice.beforeStaffId!=='string'||ids.includes(choice.memberId))return sharedReply_({error:'참여자 선택을 다시 확인해 주세요.'},400);
+    var member=model.find('members',choice.memberId),current=model.caseManagerAt(choice.memberId,today);ids.push(choice.memberId);
+    if(!member||member.active===false||current!==choice.beforeStaffId&&current!==input.staffId)conflicts.push({memberId:choice.memberId,name:member?member.name:'삭제된 참여자',currentStaffId:current});
+   }
+   if(conflicts.length)return sharedReply_({error:'선택한 참여자의 담당이 다른 직원에 의해 변경되었습니다. 최신 자료를 확인한 뒤 다시 선택해 주세요.',conflicts:conflicts},409);
+   var changed=false;
+   ids.forEach(function(id){var before=model.caseManagerAt(id,today);if(before===input.staffId)return;model.assignCaseManager(id,input.staffId,today);model.audit('사례관리 담당 일괄 변경','caseAssignments',id,{staffId:before},{staffId:input.staffId,from:today});changed=true});
+   if(changed){var next=JSON.parse(JSON.stringify(config));next.caseAssignments=model.data.caseAssignments;next.configAudit=(next.configAudit||[]).concat(model.data.audit.map(function(row){return Object.assign({},row,{actor:actor})})).slice(-150);if(JSON.stringify(next).length>950000)throw Error('기초 자료 용량 초과');manifest.config=sharedWrite_(book,'CONFIG',manifest.config,next);sharedCommit_(book,manifest)}
+   return sharedReply_({ok:true,memberIds:ids,staffId:input.staffId,from:today,caseAssignments:model.data.caseAssignments.filter(function(row){return ids.includes(row.memberId)}),revision:manifest.revision,unchanged:!changed});
+  }
   if(path==='/api/team/member'&&request.method==='POST'){
    if(!manifest.initialized||!config)return sharedReply_({error:'공동 저장소를 먼저 준비해 주세요.'},409);
    var model=sharedModel_(config,{days:{},entries:[]}),member=model.find('members',input.memberId);

@@ -27,3 +27,10 @@ test('이름 수정 저장은 한 요청으로 보내고 확인된 참여자와 
  assert.equal(baseline.members[0].name,'새 이름');assert.equal(management.data.members[1].name,'다른 사람');
  assert.equal(ctx.team.error,'');assert.equal(ctx.configPending,false);
 });
+
+test('사례관리 일괄 응답은 해당 담당 이력만 합치고 다른 미저장 변경은 유지한다',async()=>{
+ const management={data:{members:[{id:'a',communityId:'unsaved-community'}],caseAssignments:[{id:'old-a',memberId:'a',staffId:'old'},{id:'keep-b',memberId:'b',staffId:'b'}]}},baseline={caseAssignments:[{id:'old-a',memberId:'a',staffId:'old'},{id:'keep-b',memberId:'b',staffId:'b'}]};
+ const ctx=vm.createContext({management,latestAttendanceRevision:0,configBaseline:baseline,configTimer:0,clearTimeout(){},configSaving:false,configPending:false,currentConfig:()=>management.data,configChanges:()=>[{type:'members'}],originalPersist(){},refreshCollections(){},teamRequest:async(path,input)=>{assert.equal(path,'case-managers');assert.equal(input.members.length,1);return {memberIds:['a'],staffId:'new',caseAssignments:[{id:'new-a',memberId:'a',staffId:'new'}]}}});
+ vm.runInContext(source.slice(source.indexOf('async function saveCaseManagerBatch('),source.indexOf('async function requireSharedWriteAccess(')),ctx);
+ await ctx.saveCaseManagerBatch([{memberId:'a',beforeStaffId:'old'}],'new');assert.equal(management.data.members[0].communityId,'unsaved-community');assert.equal(management.data.caseAssignments.find(row=>row.memberId==='a').staffId,'new');assert.equal(management.data.caseAssignments.find(row=>row.memberId==='b').staffId,'b');assert.equal(baseline.caseAssignments.find(row=>row.memberId==='a').staffId,'new');assert.equal(ctx.configPending,true);
+});

@@ -4,7 +4,7 @@ test('초기 필터 상태에서 출결 관리 경로를 열면 필터와 명단
  const main={innerHTML:''},node={classList:{toggle(){},remove(){}},hidden:false},member={id:'m',name:'참여자',group:'401호'};
  const ctx=vm.createContext({date:'2026-11-23',people:[member],records:{},adminSession:true,participantGroup:'',location:{hash:'#attendance'},history:{replaceState(){}},document:{body:{classList:{toggle(){}}},querySelectorAll:()=>[]},$:selector=>selector==='#main'?main:node,management:{list:type=>type==='communities'?[{id:'c',name:'401호'}]:[],data:{staff:[]},find:()=>member,caseManagerAt:()=>''},esc:String,team:{active:true},photoMarkup:()=>'',attendanceOptionMarkup:()=>'<option>미입력</option>',status:()=>'',heading:title=>'<h1>'+title+'</h1>',refreshCollections(){},bind(){},bindManagement(){},updateClock(){},dashboard(){},reports(){},workspace(){},kiosk(){},login(){},managementPages:{}});
  const declarations=app.split('\n').find(line=>line.startsWith('let selectedGroup='));
- vm.runInContext(declarations+'\n'+app.split('\n').filter(line=>/^function (filterBar|filtered|attendance|attendanceRows|render)\(/.test(line)).join('\n'),ctx);
+ vm.runInContext(app.slice(app.indexOf('function loginInputSnapshot('),app.indexOf('function render(){'))+'\n'+declarations+'\n'+app.split('\n').filter(line=>/^function (filterBar|filtered|attendance|attendanceRows|render)\(/.test(line)).join('\n'),ctx);
  ctx.render();assert.match(main.innerHTML,/<h1>출결 관리<\/h1>/);assert.match(main.innerHTML,/id="attendanceStaffFilter"/);assert.match(main.innerHTML,/참여자/);
 });
 function setup(options={}){

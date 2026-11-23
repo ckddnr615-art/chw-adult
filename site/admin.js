@@ -3,6 +3,8 @@ const management=new ManagementStore(saved.management||ManagementStore.seed(grou
 management.captureDays(records);
 let participantNameQuery='',participantStaffFilter='';
 const memberRowDrafts=new Map();
+const caseBulkSelected=new Map();
+let caseBulkStaff='',caseBulkBusy=false,caseBulkMessage='';
 let managementFilter='',showArchived=false,performanceDate=date,performanceSchedule='',reportStaff='',reportMonth=date.slice(0,7),syncBusy=false;
 let apiState={available:false,configured:false,authenticated:false};
 const sheetAppUrl='https://script.google.com/a/macros/chw.or.kr/s/AKfycbynQmENIw4yEEKwpt4hA-lV2ueHel6zSWOJDzG5LFbqNGe8VCk2sywf0IzrFP62ZrbM/exec';
@@ -89,6 +91,45 @@ function bindMemberRowSaving(){
     };
   });
 }
+function bulkCaseManagerMarkup(){
+ return '<section class="case-manager-bulk" aria-label="사례관리 담당 일괄 변경"><div class="case-manager-bulk-controls"><button type="button" class="secondary" id="caseSelectVisible" '+(caseBulkBusy?'disabled':'')+'>검색 결과 전체 선택</button><button type="button" class="secondary" id="caseClearSelection" '+(caseBulkBusy?'disabled':'')+'>선택 해제</button><label>선택 인원의 사례관리 담당<select id="caseBulkStaff" '+(caseBulkBusy?'disabled':'')+'><option value="">담당 직원 선택</option><option value="unassigned" '+(caseBulkStaff==='unassigned'?'selected':'')+'>미지정으로 변경</option>'+sortedOpts(management.list('staff'),caseBulkStaff)+'</select></label><button type="button" class="primary" id="caseBulkSave" '+(!caseBulkSelected.size||!caseBulkStaff||caseBulkBusy?'disabled':'')+'>'+(caseBulkBusy?'저장 중…':'선택 '+caseBulkSelected.size+'명 사례관리 저장')+'</button></div><p id="caseBulkCount" class="formhint">선택 총 '+caseBulkSelected.size+'명 · 다른 검색 결과에서 선택한 인원도 포함합니다. 담당자를 고르면 선택 인원의 아래 드롭다운도 바뀝니다. 오늘부터 적용되며 프로그램 실적 담당과 소속은 바뀌지 않습니다.</p><p id="caseBulkFeedback" class="formerror" role="status">'+esc(caseBulkMessage)+'</p></section>';
+}
+function stageBulkCaseManager(id){
+ if(!caseBulkStaff)return;
+ const member=management.find('members',id);if(!member||member.active===false)return;
+ const before=memberRowDrafts.get(id)?.before||memberEditFields(member),draft=memberRowDrafts.get(id)||{before,communityId:member.communityId,caseManagerId:before.caseManagerId};
+ draft.caseManagerId=caseBulkStaff==='unassigned'?'':caseBulkStaff;draft.bulkCase=true;draft.error='';
+ if(draft.communityId===before.communityId&&draft.caseManagerId===before.caseManagerId)memberRowDrafts.delete(id);else memberRowDrafts.set(id,draft);
+}
+function selectBulkCaseMember(id,checked){
+ if(checked){
+  if(!caseBulkSelected.has(id)){const member=management.find('members',id);caseBulkSelected.set(id,{beforeStaffId:management.caseManagerAt(id,date),previousStaffId:memberRowDrafts.get(id)?.caseManagerId??management.caseManagerAt(id,date)})}
+  stageBulkCaseManager(id);
+ }else{
+  const selected=caseBulkSelected.get(id),draft=memberRowDrafts.get(id);
+  if(selected&&draft?.bulkCase){draft.caseManagerId=selected.previousStaffId;delete draft.bulkCase;if(draft.communityId===draft.before.communityId&&draft.caseManagerId===draft.before.caseManagerId)memberRowDrafts.delete(id)}
+  caseBulkSelected.delete(id);
+ }
+}
+function bindBulkCaseManagers(){
+ if(!$('#caseBulkSave'))return;
+ document.querySelectorAll('[data-case-member]').forEach(input=>input.onchange=()=>{selectBulkCaseMember(input.dataset.caseMember,input.checked);caseBulkMessage='';render()});
+ $('#caseSelectVisible').onclick=()=>{document.querySelectorAll('tr[data-catalog-type="members"]:not([hidden]) [data-case-member]').forEach(input=>selectBulkCaseMember(input.dataset.caseMember,true));caseBulkMessage='';render()};
+ $('#caseClearSelection').onclick=()=>{for(const id of [...caseBulkSelected.keys()])selectBulkCaseMember(id,false);caseBulkMessage='';render()};
+ $('#caseBulkStaff').onchange=event=>{caseBulkStaff=event.target.value;for(const id of caseBulkSelected.keys())stageBulkCaseManager(id);caseBulkMessage='';render()};
+ $('#caseBulkSave').onclick=async()=>{
+  if(caseBulkBusy||!caseBulkSelected.size||!caseBulkStaff)return;
+  const members=[...caseBulkSelected].map(([memberId,selection])=>({memberId,beforeStaffId:selection.beforeStaffId})),staffId=caseBulkStaff==='unassigned'?'':caseBulkStaff;
+  caseBulkBusy=true;caseBulkMessage='';render();
+  try{
+   await teamBoot;if(!team.active||!team.authenticated)throw Error('관리자 로그인과 공동 저장 연결을 확인해 주세요.');
+   if(!team.caseManagerBatch)throw Error('사례관리 일괄 변경용 Apps Script 서버를 먼저 새 버전으로 배포해 주세요.');
+   const result=await saveCaseManagerBatch(members,staffId);
+   for(const id of result.memberIds){const draft=memberRowDrafts.get(id);if(draft){draft.before.caseManagerId=staffId;draft.caseManagerId=staffId;delete draft.bulkCase;if(draft.communityId===draft.before.communityId)memberRowDrafts.delete(id)}caseBulkSelected.delete(id)}
+   caseBulkMessage='';toast(result.memberIds.length+'명의 사례관리 담당을 저장했습니다.');
+  }catch(error){caseBulkMessage=error.message}finally{caseBulkBusy=false;render()}
+ };
+}
 function catalogPage(type){
   if(type==='areas'||type==='programs')return programCatalogPage(type);
   if(type==='communities'){const items=showArchived?management.data.communities.filter(x=>x.active===false):management.kioskAffiliations();return heading('소속 관리','소속 이름과 출석 화면에 보이는 순서를 관리합니다.',`<button class="primary" data-add="communities">＋ 소속 등록</button>`)+`<section class="panel"><label class="checklabel"><input id="showArchived" type="checkbox" ${showArchived?'checked':''}>삭제한 항목 보기</label><div class="tablewrap"><table class="admin-table affiliation-table"><thead><tr><th>이름</th><th>관리</th></tr></thead><tbody>${items.map((x,index)=>`<tr><td>${esc(x.name)}</td><td class="rowactions"><div class="catalog-row-actions">${x.active===false?`<button class="secondary" data-restore="communities:${x.id}">복구</button>`:`<button class="secondary" data-kiosk-move="-1" data-kiosk-affiliation="${esc(x.id)}" aria-label="${esc(x.name)} 앞으로 이동" ${index===0?'disabled':''}>↑ 앞으로</button><button class="secondary" data-kiosk-move="1" data-kiosk-affiliation="${esc(x.id)}" aria-label="${esc(x.name)} 뒤로 이동" ${index===items.length-1?'disabled':''}>↓ 뒤로</button><button class="secondary" data-edit="communities:${x.id}">수정</button><button class="secondary danger" data-delete="communities:${x.id}">삭제</button>`}</div></td></tr>`).join('')||'<tr><td colspan="2">등록된 소속이 없습니다.</td></tr>'}</tbody></table></div></section>`}
@@ -100,7 +141,7 @@ function catalogPage(type){
   });
   const visibleMembers=type==='members'?items.filter(member=>memberNameMatches(member,participantNameQuery)).length:items.length;
   if(type==='members')items.sort((a,b)=>a.name.localeCompare(b.name,'ko',{numeric:true})||a.id.localeCompare(b.id));
-  return heading(`${typeNames[type]} 관리`,'등록·수정·삭제는 현재 운영 목록에 반영됩니다. 이미 기록한 출석과 실적은 보존합니다.',`<button class="primary" data-add="${type}">＋ ${typeNames[type]} 등록</button>`)+`<section class="panel"><div class="filters">${type==='members'?`<label>이름 검색<input type="search" id="participantNameSearch" value="${esc(participantNameQuery)}" placeholder="참여자 이름 검색" autocomplete="off"></label><label>담당 직원<select id="participantStaffFilter"><option value="">전체 직원</option><option value="unassigned" ${participantStaffFilter==='unassigned'?'selected':''}>미지정</option>${opts([...management.data.staff].sort((a,b)=>a.name.localeCompare(b.name,'ko')),participantStaffFilter,staff=>staff.name+(staff.active===false?' (삭제한 직원)':''))}</select></label>`:`<label>소속<select id="managementFilter"><option value="">전체 소속</option>${opts(management.data.communities,managementFilter)}</select></label>`}<label class="checklabel"><input id="showArchived" type="checkbox" ${showArchived?'checked':''}>삭제한 항목 보기</label></div><div class="tablewrap"><table class="admin-table"><thead><tr><th>이름 / 일정</th><th>소속</th><th>${type==='members'?'사례관리 담당':'연결 정보'}</th><th>관리</th></tr></thead><tbody>${items.map(x=>{let title=x.name,detail='';if(type==='members')detail=management.find('staff',management.caseManagerAt(x.id,date))?.name||'미지정';if(type==='areas')detail='프로그램 영역';if(type==='programs')detail=(management.find('areas',x.areaId)?.name||'')+' · 진행 '+(management.staffNames(x.facilitatorIds)||x.staff);if(type==='schedules'){title=management.find('programs',x.programId)?.name||'삭제된 프로그램';detail=(x.date||x.weekdays.map(n=>'일월화수목금토'[n]).join('·')+' 반복')+' / '+x.start+'~'+x.end+' / '+x.location}return `<tr ${type==='members'&&!memberNameMatches(x,participantNameQuery)?'hidden':''} data-catalog-type="${type}" data-catalog-id="${x.id}"><td>${esc(title)}</td>${type==='members'&&x.active!==false?memberAssignmentCells(x):`<td>${esc(management.communityName(communityOf(type,x)))}</td><td>${esc(detail)}</td>`}<td class="rowactions"><div class="catalog-row-actions">${type==='members'&&x.active!==false?`<button type="button" class="primary" data-member-save="${esc(x.id)}" ${!memberRowDrafts.has(x.id)||memberRowDrafts.get(x.id)?.saving?'disabled':''}>${memberRowDrafts.get(x.id)?.saving?'저장 중…':'저장'}</button>`:''}${x.active===false?`<button class="secondary" data-restore="${type}:${x.id}">복구</button>`:`<button class="secondary" data-edit="${type}:${x.id}">수정</button><button class="secondary danger" data-delete="${type}:${x.id}">삭제</button>`}</div>${type==='members'&&x.active!==false?`<small data-member-row-status role="status">${esc(memberRowDrafts.get(x.id)?.error||'')}</small>`:''}</td></tr>`}).join('')||(type==='members'?'':'<tr><td colspan="4">해당 항목이 없습니다.</td></tr>')}${type==='members'?`<tr id="memberRosterEmpty" ${visibleMembers?'hidden':''}><td colspan="4">검색 조건에 맞는 참여자가 없습니다.</td></tr>`:''}</tbody></table></div><p class="notice">${type==='members'?`<span id="memberRosterCount" role="status">${visibleMembers}명</span>`:items.length+'건'} · 삭제한 항목은 현재 목록에서 제외되며 이력과 이전 실적에 남습니다.</p></section>`;
+  return heading(`${typeNames[type]} 관리`,'등록·수정·삭제는 현재 운영 목록에 반영됩니다. 이미 기록한 출석과 실적은 보존합니다.',`<button class="primary" data-add="${type}">＋ ${typeNames[type]} 등록</button>`)+`<section class="panel"><div class="filters">${type==='members'?`<label>이름 검색<input type="search" id="participantNameSearch" value="${esc(participantNameQuery)}" placeholder="참여자 이름 검색" autocomplete="off"></label><label>담당 직원<select id="participantStaffFilter"><option value="">전체 직원</option><option value="unassigned" ${participantStaffFilter==='unassigned'?'selected':''}>미지정</option>${opts([...management.data.staff].sort((a,b)=>a.name.localeCompare(b.name,'ko')),participantStaffFilter,staff=>staff.name+(staff.active===false?' (삭제한 직원)':''))}</select></label>`:`<label>소속<select id="managementFilter"><option value="">전체 소속</option>${opts(management.data.communities,managementFilter)}</select></label>`}<label class="checklabel"><input id="showArchived" type="checkbox" ${showArchived?'checked':''}>삭제한 항목 보기</label></div>${type==='members'&&!showArchived?bulkCaseManagerMarkup():''}<div class="tablewrap"><table class="admin-table"><thead><tr>${type==='members'&&!showArchived?'<th class="member-select-cell">선택</th>':''}<th>이름 / 일정</th><th>소속</th><th>${type==='members'?'사례관리 담당':'연결 정보'}</th><th>관리</th></tr></thead><tbody>${items.map(x=>{let title=x.name,detail='';if(type==='members')detail=management.find('staff',management.caseManagerAt(x.id,date))?.name||'미지정';if(type==='areas')detail='프로그램 영역';if(type==='programs')detail=(management.find('areas',x.areaId)?.name||'')+' · 진행 '+(management.staffNames(x.facilitatorIds)||x.staff);if(type==='schedules'){title=management.find('programs',x.programId)?.name||'삭제된 프로그램';detail=(x.date||x.weekdays.map(n=>'일월화수목금토'[n]).join('·')+' 반복')+' / '+x.start+'~'+x.end+' / '+x.location}return `<tr ${type==='members'&&!memberNameMatches(x,participantNameQuery)?'hidden':''} data-catalog-type="${type}" data-catalog-id="${x.id}">${type==='members'&&!showArchived?`<td class="member-select-cell"><input type="checkbox" data-case-member="${esc(x.id)}" aria-label="${esc(x.name)} 일괄 변경 선택" ${caseBulkSelected.has(x.id)?'checked':''} ${caseBulkBusy?'disabled':''}></td>`:''}<td class="member-name-cell">${esc(title)}</td>${type==='members'&&x.active!==false?memberAssignmentCells(x):`<td>${esc(management.communityName(communityOf(type,x)))}</td><td>${esc(detail)}</td>`}<td class="rowactions"><div class="catalog-row-actions">${type==='members'&&x.active!==false?`<button type="button" class="primary" data-member-save="${esc(x.id)}" ${!memberRowDrafts.has(x.id)||memberRowDrafts.get(x.id)?.saving?'disabled':''}>${memberRowDrafts.get(x.id)?.saving?'저장 중…':'저장'}</button>`:''}${x.active===false?`<button class="secondary" data-restore="${type}:${x.id}">복구</button>`:`<button class="secondary" data-edit="${type}:${x.id}">수정</button><button class="secondary danger" data-delete="${type}:${x.id}">삭제</button>`}</div>${type==='members'&&x.active!==false?`<small data-member-row-status role="status">${esc(memberRowDrafts.get(x.id)?.error||'')}</small>`:''}</td></tr>`}).join('')||(type==='members'?'':'<tr><td colspan="4">해당 항목이 없습니다.</td></tr>')}${type==='members'?`<tr id="memberRosterEmpty" ${visibleMembers?'hidden':''}><td colspan="${showArchived?4:5}">검색 조건에 맞는 참여자가 없습니다.</td></tr>`:''}</tbody></table></div><p class="notice">${type==='members'?`<span id="memberRosterCount" role="status">${visibleMembers}명</span>`:items.length+'건'} · 삭제한 항목은 현재 목록에서 제외되며 이력과 이전 실적에 남습니다.</p></section>`;
 }
 function openEditor(type,id=''){
   if(type==='programs')return openProgramRegistration(id);
@@ -222,6 +263,7 @@ function bindManagement(page){
   document.querySelectorAll('[data-delete]').forEach(b=>b.onclick=()=>deleteItem(...b.dataset.delete.split(':')));
   document.querySelectorAll('[data-restore]').forEach(b=>b.onclick=()=>restoreItem(...b.dataset.restore.split(':')));
   bindMemberRowSaving();
+  bindBulkCaseManagers();
   if($('#participantStaffFilter'))$('#participantStaffFilter').onchange=event=>{participantStaffFilter=event.target.value;render()};
   if($('#participantNameSearch'))$('#participantNameSearch').oninput=event=>{
     participantNameQuery=event.target.value;

@@ -546,3 +546,30 @@ test('같은 날 실적 담당을 바꾼 후 출석을 재확인해도 두 직�
  assert.equal(latest.length,1);assert.equal(latest[0].reportStaff[0].id,second.id);
  assert.equal(e.sheets.get(second.name+' 실적').getLastRow(),2);
 });
+
+test('선택한 인원의 사례관리 담당만 일괄 변경하고 과거 이력과 프로그램 배정은 보존한다',()=>{
+ const e=environment(),model=e.model(),first=model.data.staff[0],second=model.save('staff','',{name:'새 사례관리 담당'},'2026-10-01');
+ const m2=model.save('members','',{name:'두 번째 인원',communityId:'community-1'},'2026-10-01'),m3=model.save('members','',{name:'미선택 인원',communityId:'community-1'},'2026-10-01');
+ for(const id of ['person-1',m2.id,m3.id])model.assignCaseManager(id,first.id,'2026-10-01');
+ const program=JSON.stringify(model.data.programs),enrollments=JSON.stringify(model.data.enrollments),members=JSON.stringify(model.data.members);
+ e.login();const initialized=e.call('/api/team/initialize',{management:model.data,records:{}});assert.equal(initialized.status,200,JSON.stringify(initialized.body));
+ assert.equal(e.call('/api/team/attendance',{memberId:'person-1',date:'2026-10-28',status:'출석',requestId:crypto.randomUUID()}).status,200);
+ assert.equal(e.call('/api/team/status',{},'GET').body.caseManagerBatch,true);
+ const request={members:[{memberId:'person-1',beforeStaffId:first.id},{memberId:m2.id,beforeStaffId:first.id}],staffId:second.id};
+ const result=e.call('/api/team/case-managers',request);assert.equal(result.status,200,JSON.stringify(result.body));assert.equal(result.body.memberIds.length,2);
+ const state=e.call('/api/team/state',{},'GET').body,next=new e.context.ManagementStore({...state.config,days:{},entries:[]});
+ assert.equal(next.caseManagerAt('person-1','2026-10-28'),first.id);assert.equal(next.caseManagerAt('person-1','2026-10-29'),second.id);assert.equal(next.caseManagerAt(m2.id,'2026-10-29'),second.id);assert.equal(next.caseManagerAt(m3.id,'2026-10-29'),first.id);
+ assert.equal(JSON.stringify(state.config.members),members);assert.equal(JSON.stringify(state.config.programs),program);assert.equal(JSON.stringify(state.config.enrollments),enrollments);assert.equal(state.records['2026-10-28:person-1'],'출석');
+ const replay=e.call('/api/team/case-managers',request);assert.equal(replay.status,200);assert.equal(replay.body.unchanged,true);assert.equal(replay.body.revision,result.body.revision);
+});
+
+test('사례관리 일괄 저장은 한 인원만 동시 변경돼도 다른 선택 인원까지 일부 저장하지 않는다',()=>{
+ const e=environment(),model=e.model(),first=model.data.staff[0],second=model.save('staff','',{name:'다른 직원 변경'},'2026-10-01'),third=model.save('staff','',{name:'일괄 변경 대상'},'2026-10-01');
+ const person=model.save('members','',{name:'경합 인원',communityId:'community-1'},'2026-10-01');model.assignCaseManager('person-1',first.id,'2026-10-01');model.assignCaseManager(person.id,first.id,'2026-10-01');
+ e.login();e.call('/api/team/initialize',{management:model.data,records:{}});
+ assert.equal(e.call('/api/team/case-managers',{members:[{memberId:person.id,beforeStaffId:first.id}],staffId:second.id}).status,200);
+ const result=e.call('/api/team/case-managers',{members:[{memberId:'person-1',beforeStaffId:first.id},{memberId:person.id,beforeStaffId:first.id}],staffId:third.id});
+ assert.equal(result.status,409);assert.equal(result.body.conflicts.length,1);
+ const state=e.call('/api/team/state',{},'GET').body,next=new e.context.ManagementStore({...state.config,days:{},entries:[]});assert.equal(next.caseManagerAt('person-1','2026-10-29'),first.id);assert.equal(next.caseManagerAt(person.id,'2026-10-29'),second.id);
+ assert.equal(e.call('/api/team/case-managers',{members:[{memberId:'person-1',beforeStaffId:first.id}],staffId:'없는직원'}).status,400);
+});

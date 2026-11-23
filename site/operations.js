@@ -51,6 +51,15 @@ async function saveMemberDetails(id,before,after){
  originalPersist();refreshCollections();
  return result;
 }
+async function saveCaseManagerBatch(members,staffId){
+ clearTimeout(configTimer);if(configSaving)await saveTeamConfig();
+ const result=await teamRequest('case-managers',{members,staffId}),ids=new Set(result.memberIds);
+ latestAttendanceRevision=Math.max(latestAttendanceRevision,result.revision||0);
+ const merge=rows=>(rows||[]).filter(row=>!ids.has(row.memberId)).concat(result.caseAssignments);
+ management.data.caseAssignments=merge(management.data.caseAssignments);
+ if(configBaseline)configBaseline.caseAssignments=merge(configBaseline.caseAssignments);
+ configPending=configChanges(currentConfig()).length>0;originalPersist();refreshCollections();return result;
+}
 async function requireSharedWriteAccess(){
   await teamBoot;
   const response=await fetch('/api/team/status',{credentials:'same-origin'});
@@ -181,7 +190,7 @@ function automaticLedger(d,memberId=''){
 }
 function patchPhotos(){
   for(const button of document.querySelectorAll('[data-checkin]')){const member=management.find('members',button.dataset.checkin);if(member?.photo)button.querySelector('.avatar')?.replaceWith(document.createRange().createContextualFragment(photoMarkup(member)))}
-  for(const row of document.querySelectorAll('tr[data-catalog-type="members"]')){const member=management.find('members',row.dataset.catalogId);if(member)row.cells[0].insertAdjacentHTML('afterbegin',photoMarkup(member,'small-portrait'))}
+  for(const row of document.querySelectorAll('tr[data-catalog-type="members"]')){const member=management.find('members',row.dataset.catalogId);if(member)(row.querySelector('.member-name-cell')||row.cells[0]).insertAdjacentHTML('afterbegin',photoMarkup(member,'small-portrait'))}
   void hydratePhotos();
 }
 render=function(){if(location.hash==='#performance')history.replaceState(null,'','#attendance');previousOperationsRender();showTeamStatus();patchPhotos();holidayNotice();if(location.hash.split('/')[0]==='#attendance'&&$('#main .panel')){$('#main .panel').insertAdjacentHTML('beforeend',automaticLedger(selectedDate));$('#main .panel').insertAdjacentHTML('beforebegin',programAttendancePanel());bindProgramAttendance();if($('#exportLinkedEntries'))$('#exportLinkedEntries').onclick=()=>exportEntries(management.data.entries.filter(e=>e.date===selectedDate),'출석연동_실적_'+selectedDate+'.csv')}};
@@ -307,7 +316,7 @@ managementPages.settings=function(){return heading('환경 설정','운영 환�
 managementPages.performance=attendance;
 let sharedRefreshBusy=false;
 function sharedRefreshBlocked(){
- return !sharedScreenCanRefresh()||(typeof memberRowDrafts!=='undefined'&&memberRowDrafts.size>0)||(typeof programStaffDrafts!=='undefined'&&programStaffDrafts.size>0);
+ return !sharedScreenCanRefresh()||(typeof caseBulkSelected!=='undefined'&&caseBulkSelected.size>0)||(typeof memberRowDrafts!=='undefined'&&memberRowDrafts.size>0)||(typeof programStaffDrafts!=='undefined'&&programStaffDrafts.size>0);
 }
 function syncSharedRefreshControl(){
  const header=document.querySelector('.headeractions');if(!header)return;

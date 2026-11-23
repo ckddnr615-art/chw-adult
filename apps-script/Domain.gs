@@ -80,7 +80,8 @@
       if(schedule.validTo&&from>schedule.validTo)throw Error('시작일은 종료일 이후로 설정할 수 없습니다.');
       if(from===schedule.validFrom)return schedule;
       const series=schedule.seriesId||schedule.id;
-      if(this.list('schedules').some(other=>other.id!==id&&(other.seriesId||other.id)===series&&other.validTo&&other.validTo<(schedule.validFrom||'9999-12-31')&&other.validTo>=from))throw Error('이전 일정 기간과 겹칩니다. 이전 일정이 끝난 다음 날짜부터 선택해 주세요.');
+      const previousSchedule=this.list('schedules').find(other=>other.id!==id&&(other.seriesId||other.id)===series&&!other.date&&other.validTo&&(!other.validFrom||other.validFrom<=other.validTo)&&(other.weekdays||[]).some(day=>(schedule.weekdays||[]).includes(day))&&other.validTo<(schedule.validFrom||'9999-12-31')&&other.validTo>=from);
+      if(previousSchedule)throw Error('같은 요일의 이전 일정 ('+(previousSchedule.validFrom||'기본')+' ~ '+previousSchedule.validTo+')과 겹칩니다. 시작일은 '+ManagementStore.addDays(previousSchedule.validTo,1)+' 이후로 선택해 주세요.');
       const backup=clone(this.data);
       try{
         const previous=schedule.validFrom,saved=this.save('schedules',id,{validFrom:from},today);

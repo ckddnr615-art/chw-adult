@@ -134,3 +134,19 @@ test('시작일 수정은 잘못된 날짜·종료일 초과·이전 일정 이�
  const next=f.store.reviseSchedule(base.id,{location:'다른 장소'},'2026-11-09');assert.throws(()=>f.store.changeScheduleStart(next.id,'2026-11-02','2026-11-23'),/이전 일정/);
  const changed=f.store.changeScheduleStart(next.id,'2026-11-12','2026-11-23');assert.equal(changed.validFrom,'2026-11-12');
 });
+
+test('과거 수정 오류로 시작일보다 종료일이 앞선 빈 이력이 있어도 실제 시작일을 앞당길 수 있다',()=>{
+ const f=fixture(),start='2027-01-14',created=context.saveProgramWithSchedule(f.store,f.program,{...f.schedule,weekdays:[4],validFrom:start,validTo:'2027-12-23'},'2026-11-23').schedule;
+ const historyId='empty-legacy-history';created.seriesId=historyId;
+ f.store.data.schedules.push({...JSON.parse(JSON.stringify(created)),id:historyId,seriesId:historyId,validTo:'2027-01-13'});
+ f.store.data.enrollments.push({id:'same-start-person',scheduleId:created.id,memberId:'person',from:start,to:'',active:true});
+ const next=f.store.changeScheduleStart(created.id,'2026-11-23','2026-11-23');
+ assert.equal(next.validFrom,'2026-11-23');assert.equal(next.validTo,'2027-12-23');assert.equal(f.store.find('schedules',historyId).validTo,'2027-01-13');
+ assert.equal(f.store.data.enrollments.find(e=>e.id==='same-start-person').from,'2026-11-23');
+});
+
+test('요일별로 나눈 다른 요일 이력은 시작일 수정의 충돌로 잘못 처리하지 않는다',()=>{
+ const f=fixture(),created=context.saveProgramWithSchedule(f.store,f.program,{...f.schedule,weekdays:[4],validFrom:'2027-01-14',validTo:'2027-12-23'},'2026-11-23').schedule;
+ created.seriesId='split-weekdays';f.store.data.schedules.push({...JSON.parse(JSON.stringify(created)),id:'older-wednesday',weekdays:[3],validFrom:'2027-01-01',validTo:'2027-01-13'});
+ assert.equal(f.store.changeScheduleStart(created.id,'2026-11-23','2026-11-23').validFrom,'2026-11-23');
+});
