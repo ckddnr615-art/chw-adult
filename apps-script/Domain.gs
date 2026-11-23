@@ -64,12 +64,32 @@
     reviseSchedule(id,fields,from){
       const old=this.find('schedules',id);if(!old||old.active===false||old.date)throw Error('변경할 반복 일정을 선택해 주세요.');
       if((old.validFrom&&from<old.validFrom)||(old.validTo&&from>old.validTo))throw Error('변경 적용일이 기존 일정 기간을 벗어났습니다.');
-      const before=clone(old),next=this.save('schedules','',{...clone(old),...clone(fields),seriesId:old.seriesId||old.id,validFrom:from,validTo:''},from);
+      if(from===old.validFrom)return this.save('schedules',id,{...clone(fields),seriesId:old.seriesId||old.id,validFrom:from},from);
+      const before=clone(old),next=this.save('schedules','',{...clone(old),...clone(fields),seriesId:old.seriesId||old.id,validFrom:from,validTo:fields.validTo!==undefined?fields.validTo:old.validTo||''},from);
       // Preserve the old occurrence IDs and earlier enrollment records.
       old.validTo=ManagementStore.addDays(from,-1);
       for(const enrollment of this.data.enrollments.filter(e=>e.scheduleId===id&&e.active!==false&&(!e.to||e.to>=from))){this.data.enrollments.push({...clone(enrollment),id:uid(),scheduleId:next.id,from:enrollment.from>from?enrollment.from:from});if(enrollment.from>=from)enrollment.active=false;else enrollment.to=ManagementStore.addDays(from,-1)}
       for(const override of this.data.scheduleOverrides.filter(o=>o.scheduleId===id&&o.active!==false&&o.date>=from)){this.data.scheduleOverrides.push({...clone(override),id:uid(),scheduleId:next.id});override.active=false}
       this.audit('반복 일정 변경','schedules',id,before,{previous:old,next});return next;
+    }
+    splitScheduleWeekdays(id,from){
+      const backup=clone(this.data);
+      try{
+        let base=this.find('schedules',id);
+        if(!base||base.active===false||base.date||base.weekdays.length<2)throw Error('여러 요일로 반복하는 일정을 선택해 주세요.');
+        if(!/^\d{4}-\d{2}-\d{2}$/.test(from)||(base.validFrom&&from<base.validFrom)||(base.validTo&&from>base.validTo))throw Error('요일 분리 적용일을 확인해 주세요.');
+        if(from!==base.validFrom)base=this.reviseSchedule(id,{},from);
+        const template=clone(base),enrollments=clone(this.data.enrollments.filter(e=>e.scheduleId===base.id&&e.active!==false)),result=[];
+        for(let i=0;i<template.weekdays.length;i++){
+          const day=template.weekdays[i],owner=template.reportStaffByWeekday?.[day]||template.reportStaffId||'',fields={...clone(template),weekdays:[day],reportStaffByWeekday:owner?{[day]:owner}:{},reportStaffId:'',facilitatorIds:owner?[owner]:template.facilitatorIds};
+          const next=this.save('schedules',i?'':base.id,fields,from);result.push(next);
+          if(i)for(const entry of enrollments)this.data.enrollments.push({...clone(entry),id:uid(),scheduleId:next.id});
+        }
+        for(const override of this.data.scheduleOverrides.filter(o=>o.scheduleId===base.id&&o.active!==false&&o.date>=from)){
+          const day=new Date(override.date+'T12:00:00Z').getUTCDay(),next=result.find(s=>s.weekdays.includes(day));if(next)override.scheduleId=next.id;
+        }
+        this.audit('요일별 일정 분리','schedules',id,template,result);return result;
+      }catch(error){this.data=backup;throw error}
     }
     personalSchedules(memberId,d){return this.schedulesOn(d).filter(s=>this.eligibleMembers(s,d).some(m=>m.id===memberId))}
     conflictsFor(memberId,d){const schedules=this.personalSchedules(memberId,d),pairs=[];for(let i=0;i<schedules.length;i++)for(let j=i+1;j<schedules.length;j++)if(schedules[i].start<schedules[j].end&&schedules[j].start<schedules[i].end)pairs.push([schedules[i].id,schedules[j].id]);return pairs}

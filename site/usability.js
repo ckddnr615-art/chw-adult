@@ -201,3 +201,72 @@ dashboard=function(){
  return output.replace('<section class="metrics">',html+'<section class="metrics">');
 };
 render();
+
+/* The session clock never navigates away from an unfinished editor. */
+function adminSessionClock(now,info){
+ if(!info?.authenticated)return {text:'로그인 만료 · 다시 로그인',warning:true};
+ if(!info.expiresAt)return {text:'로그인 남은 시간 확인 필요 · 다시 로그인',warning:true};
+ const seconds=Math.max(0,Math.ceil((info.expiresAt-now)/1000));
+ if(!seconds)return {text:'로그인 시간 만료 · 다시 로그인',warning:true};
+ const h=Math.floor(seconds/3600),m=Math.floor(seconds%3600/60),s=seconds%60;
+ return {text:'로그인 남은 시간 '+[h,m,s].map(n=>String(n).padStart(2,'0')).join(':'),warning:seconds<=300};
+}
+function updateAdminSessionClock(){
+ const header=document.querySelector('.headeractions');if(!header)return;
+ let node=document.querySelector('#adminSessionClock');
+ const info=window.googleSessionInfo?.();
+ if(document.body.classList.contains('participant-mode')||(!adminSession&&!info?.authenticated)){if(node)node.remove();return}
+ if(!node){node=document.createElement('a');node.id='adminSessionClock';node.href='#login';node.title='관리자 비밀번호로 다시 로그인하면 시간이 새로 시작됩니다.';header.append(node)}
+ const clock=adminSessionClock(Date.now(),info);node.textContent=clock.text;node.classList.toggle('session-warning',clock.warning);
+}
+window.addEventListener('ch-session-change',updateAdminSessionClock);
+setInterval(updateAdminSessionClock,1000);
+const previousSessionBind=bindManagement;
+bindManagement=function(page){previousSessionBind(page);updateAdminSessionClock();bindProgramStaffQuickEditors()};
+
+const programStaffDrafts=new Map();
+function programStaffQuickEditor(schedule){
+ const draft=programStaffDrafts.get(schedule.id),program=management.find('programs',schedule.programId),ids=schedule.facilitatorIds||program?.facilitatorIds||[];
+ const days=schedule.date?[new Date(schedule.date+'T12:00:00Z').getUTCDay()]:schedule.weekdays;
+ return `<div class="program-staff-quick" data-quick-schedule="${esc(schedule.id)}">${days.map(day=>{
+ const selected=draft?.assignments?.[day]??schedule.reportStaffByWeekday?.[day]??schedule.reportStaffId??(ids.length===1?ids[0]:'');
+ const staff=management.data.staff.filter(staff=>staff.active!==false||staff.id===selected);
+ return `<label>${schedule.date?'당일 담당': '일월화수목금토'[day]+'요일 담당'}<select data-quick-staff="${day}" aria-label="${esc(program?.name||'프로그램')} ${'일월화수목금토'[day]}요일 담당"><option value="">담당 직원 선택</option>${sortedOpts(staff,selected,staff=>staff.name+(staff.active===false?' (삭제)':''))}</select></label>`;
+ }).join('')}<label>변경 적용일<input type="date" data-quick-from value="${esc(draft?.from||schedule.date||(schedule.validFrom&&schedule.validFrom>date?schedule.validFrom:date))}" ${schedule.date?'readonly':''} ${schedule.validFrom?'min="'+esc(schedule.validFrom)+'"':''} ${schedule.validTo?'max="'+esc(schedule.validTo)+'"':''}></label><button type="button" class="primary" data-quick-staff-save ${!draft||draft.saving?'disabled':''}>${draft?.saving?'저장 중…':'담당자 저장'}</button><small data-quick-staff-error role="status">${esc(draft?.error||'')}</small></div>`;
+}
+function updateScheduleStaff(store,scheduleId,assignments,from){
+ const schedule=store.find('schedules',scheduleId);if(!schedule||schedule.active===false)throw Error('변경할 일정을 다시 확인해 주세요.');
+ const days=schedule.date?[new Date(schedule.date+'T12:00:00Z').getUTCDay()]:schedule.weekdays;
+ if(!/^\d{4}-\d{2}-\d{2}$/.test(from))throw Error('변경 적용일을 선택해 주세요.');
+ const mapping={};for(const day of days){const id=assignments[day];if(!store.list('staff').some(staff=>staff.id===id))throw Error('운영 요일별 담당 직원을 선택해 주세요.');mapping[day]=id}
+ const fields={facilitatorIds:[...new Set(Object.values(mapping))],reportStaffByWeekday:mapping,reportStaffId:''};
+ return schedule.date?store.save('schedules',scheduleId,fields,from):store.reviseSchedule(scheduleId,fields,from);
+}
+function bindProgramStaffQuickEditors(){
+ document.querySelectorAll('[data-split-weekdays]').forEach(button=>button.onclick=()=>{
+  const id=button.dataset.splitWeekdays,schedule=management.find('schedules',id),from=programStaffDrafts.get(id)?.from||(schedule.validFrom&&schedule.validFrom>date?schedule.validFrom:date);
+  modal('<h2>요일별 일정으로 나누기</h2><p>'+esc(management.find('programs',schedule.programId)?.name||'프로그램')+' · '+esc(from)+'부터 각 요일을 별도 일정으로 관리합니다.</p><p>현재 참여자 명단은 각 요일에 유지됩니다. 나눈 뒤 요일별 담당자와 참여자를 각각 수정해 주세요. 이전 기록은 보관합니다.</p><button type="button" class="primary" id="confirmSplitWeekdays">요일별로 나누기</button>');
+  $('#confirmSplitWeekdays').onclick=async()=>{
+   const confirm=$('#confirmSplitWeekdays');confirm.disabled=true;
+   if(transaction(()=>management.splitScheduleWeekdays(id,from))){if(team.active){clearTimeout(configTimer);await saveTeamConfig()}$('#dialog').close();programStaffDrafts.delete(id);render();toast(team.error||'요일별로 나눴습니다. 각 행에서 담당자와 참여자를 수정해 주세요.')}else confirm.disabled=false;
+  };
+ });
+ document.querySelectorAll('[data-program-schedule-edit]').forEach(button=>button.onclick=()=>{const schedule=management.find('schedules',button.dataset.programScheduleEdit);if(schedule)openProgramRegistration(schedule.programId,schedule.id)});
+ document.querySelectorAll('[data-quick-schedule]').forEach(box=>{
+ const id=box.dataset.quickSchedule,button=box.querySelector('[data-quick-staff-save]'),feedback=box.querySelector('[data-quick-staff-error]');
+ const capture=()=>{const pending=programStaffDrafts.get(id);if(pending?.applied){feedback.textContent='앞선 변경을 서버에 저장한 뒤 다시 수정해 주세요.';return pending}const draft={assignments:Object.fromEntries([...box.querySelectorAll('[data-quick-staff]')].map(input=>[input.dataset.quickStaff,input.value])),from:box.querySelector('[data-quick-from]').value,error:''};programStaffDrafts.set(id,draft);button.disabled=false;feedback.textContent='';return draft};
+ box.querySelectorAll('input,select').forEach(input=>input.onchange=capture);
+ button.onclick=async()=>{
+  const draft=programStaffDrafts.get(id)||capture();draft.saving=true;button.disabled=true;button.textContent='저장 중…';box.querySelectorAll('input,select').forEach(input=>input.disabled=true);
+  try{
+   if(team.error){if(draft.applied&&configRetryable){team.error='';configRetryable=false}else throw Error(team.error)}
+   if(team.active&&!team.weekdayReportTabs)throw Error('요일별 담당 배정용 Apps Script 서버를 먼저 적용해 주세요.');
+   let saved;const before=JSON.stringify(management.data);
+   try{if(draft.applied)saved=management.find('schedules',draft.savedId);else{saved=updateScheduleStaff(management,id,draft.assignments,draft.from);if(!persist())throw Error('기기에 저장하지 못했습니다.');draft.applied=true;draft.savedId=saved.id}}catch(error){management.data=JSON.parse(before);throw error}
+   refreshCollections();
+   if(team.active){clearTimeout(configTimer);await saveTeamConfig();if(team.error)throw Error(team.error)}
+   programStaffDrafts.delete(id);if(saved.id!==id)programStaffDrafts.delete(saved.id);render();toast('요일별 담당자를 저장했습니다. 이전 출석·실적은 보관합니다.');
+  }catch(error){draft.saving=false;draft.error=error.message;feedback.textContent=error.message;button.disabled=false;button.textContent='담당자 저장';box.querySelectorAll('input,select').forEach(input=>input.disabled=false)}
+ };
+ });
+}

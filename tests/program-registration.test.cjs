@@ -33,3 +33,68 @@ test('오늘 담당자 표는 당일 대체 담당자와 장소를 표시하고 
  assert.match(table(store,day,caseStaff.id),/대체 담당자 · 공동 담당자/);
  assert.match(table(store,'2026-11-15',''),/오늘 운영하는 프로그램이 없습니다/);
 });
+
+test('시작일과 같은 날 담당자를 반복 수정해도 종료일이 뒤집히거나 일정이 중복되지 않는다',()=>{
+ const f=fixture(),created=context.saveProgramWithSchedule(f.store,f.program,f.schedule,'2026-10-29');
+ const staff=f.store.save('staff','',{name:'새 담당자'},'2026-10-29');
+ const count=f.store.data.schedules.length;
+ const revised=context.updateProgramWithSchedule(f.store,created.program.id,created.schedule.id,f.program,{...f.schedule,facilitatorIds:[staff.id],reportStaffByWeekday:{1:staff.id,3:staff.id,5:staff.id}},'2026-10-29');
+ assert.equal(revised.schedule.id,created.schedule.id);assert.equal(revised.schedule.validTo,'2026-12-31');assert.equal(f.store.data.schedules.length,count);
+ const second=context.updateProgramWithSchedule(f.store,created.program.id,created.schedule.id,f.program,{...f.schedule,facilitatorIds:f.program.facilitatorIds,reportStaffByWeekday:{1:f.program.facilitatorIds[0],3:f.program.facilitatorIds[0],5:f.program.facilitatorIds[0]}},'2026-10-29');
+ assert.equal(second.schedule.id,created.schedule.id);assert.equal(second.schedule.validFrom,'2026-11-02');assert.equal(second.schedule.validTo,'2026-12-31');
+});
+
+test('담당자 빠른 수정은 요일마다 한 직원에게만 배정하고 이전 실적과 참여자를 보존한다',()=>{
+ const f=fixture(),created=context.saveProgramWithSchedule(f.store,f.program,f.schedule,'2026-10-29');
+ const partner=f.store.save('staff','',{name:'다른 담당자'},'2026-10-29'),first=f.program.facilitatorIds[0];
+ f.store.data.enrollments.push({id:'quick-e',scheduleId:created.schedule.id,memberId:'m1',from:'2026-11-02',to:'',active:true});
+ const ui=fs.readFileSync(require.resolve('../site/usability.js'),'utf8');
+ const update=vm.runInNewContext(ui.slice(ui.indexOf('function updateScheduleStaff('),ui.indexOf('function bindProgramStaffQuickEditors('))+';updateScheduleStaff');
+ const next=update(f.store,created.schedule.id,{1:first,3:partner.id,5:first},'2026-11-09');
+ assert.notEqual(next.id,created.schedule.id);assert.equal(f.store.find('schedules',created.schedule.id).validTo,'2026-11-08');
+ assert.equal(next.validTo,'2026-12-31');assert.equal(next.reportStaffByWeekday[3],partner.id);assert.equal(new Set(next.facilitatorIds).size,2);
+ assert.ok(f.store.data.enrollments.some(e=>e.scheduleId===next.id&&e.memberId==='m1'));
+ assert.throws(()=>update(f.store,next.id,{1:first,3:'',5:first},'2026-11-09'),/담당 직원/);
+});
+
+test('로그인 시계는 남은 시간과 5분 전 경고를 표시한다',()=>{
+ const ui=fs.readFileSync(require.resolve('../site/usability.js'),'utf8');
+ const clock=vm.runInNewContext(ui.slice(ui.indexOf('function adminSessionClock('),ui.indexOf('function updateAdminSessionClock('))+';adminSessionClock');
+ assert.equal(clock(1000,{authenticated:true,expiresAt:14401000}).text,'로그인 남은 시간 04:00:00');
+ assert.equal(clock(1000,{authenticated:true,expiresAt:301000}).warning,true);
+ assert.equal(clock(1000,{authenticated:true,expiresAt:1000}).warning,true);
+ assert.match(clock(1000,{authenticated:true,expiresAt:0}).text,/확인 필요/);
+ assert.match(clock(1000,{authenticated:false}).text,/로그인 만료/);
+});
+
+test('프로그램 목록은 일정마다 삭제 버튼을 만들고 하나를 삭제해도 다른 일정은 남는다',()=>{
+ const f=fixture(),r=context.saveProgramWithSchedule(f.store,f.program,f.schedule,'2026-10-29');
+ const second=f.store.save('schedules','',{...f.schedule,programId:r.program.id,weekdays:[2]},'2026-10-29');
+ const admin=fs.readFileSync(require.resolve('../site/admin.js'),'utf8');
+ const catalog=vm.runInNewContext(admin.slice(admin.indexOf('function integratedProgramCatalog('),admin.indexOf('function programCatalogPage('))+';integratedProgramCatalog',{
+  management:f.store,showArchived:false,programAreaFilter:'',programStaffFilter:'',programStatusFilter:'',date:'2026-10-29',heading:()=>'',esc:String,opts:()=>'',programStaffQuickEditor:()=>'<div>요일별 담당자</div>'
+ });
+ const html=catalog();assert.ok(html.includes('data-delete="schedules:'+r.schedule.id+'"'));assert.ok(html.includes('data-delete="schedules:'+second.id+'"'));assert.match(html,/이 일정 삭제/);assert.match(html,/프로그램 전체 관리/);
+ f.store.remove('schedules',r.schedule.id);assert.equal(f.store.find('programs',r.program.id).active,true);assert.equal(f.store.find('schedules',second.id).active,true);
+ assert.ok(f.store.schedulesOn('2026-11-03').some(s=>s.id===second.id));
+});
+
+test('화수 반복을 요일별로 분리하면 직원과 참여자를 독립적으로 배정할 수 있다',()=>{
+ const f=fixture(),staffA=f.program.facilitatorIds[0],staffB=f.store.save('staff','',{name:'수요일 직원'},'2026-10-29').id;
+ const members=['화요일 이용인','수요일 이용인'].map(name=>f.store.save('members','',{name,communityId:f.store.list('communities')[0].id},'2026-10-29'));
+ const base=context.saveProgramWithSchedule(f.store,{...f.program,facilitatorIds:[staffA,staffB]},{...f.schedule,weekdays:[2,3],facilitatorIds:[staffA,staffB],reportStaffByWeekday:{2:staffA,3:staffB}},'2026-10-29').schedule;
+ f.store.assignParticipants(base.id,members.map(m=>m.id),'2026-11-02','individual');
+ const rows=f.store.splitScheduleWeekdays(base.id,'2026-11-02');assert.equal(rows.length,2);assert.equal(new Set(rows.map(s=>s.id)).size,2);
+ const tue=rows.find(s=>s.weekdays[0]===2),wed=rows.find(s=>s.weekdays[0]===3);
+ assert.deepEqual(tue.facilitatorIds,[staffA]);assert.deepEqual(wed.facilitatorIds,[staffB]);
+ f.store.assignParticipants(tue.id,[members[0].id],'2026-11-02','individual');f.store.assignParticipants(wed.id,[members[1].id],'2026-11-02','individual');
+ const onTue=f.store.schedulesOn('2026-11-03').find(s=>s.id===tue.id),onWed=f.store.schedulesOn('2026-11-11').find(s=>s.id===wed.id);
+ assert.deepEqual(f.store.eligibleMembers(onTue,'2026-11-03').map(m=>m.id),[members[0].id]);assert.deepEqual(f.store.eligibleMembers(onWed,'2026-11-11').map(m=>m.id),[members[1].id]);
+ f.store.remove('schedules',tue.id);assert.ok(f.store.schedulesOn('2026-11-11').some(s=>s.id===wed.id));
+});
+
+test('운영 중인 반복 일정을 요일별로 나눠도 적용일 전 일정과 기록은 유지된다',()=>{
+ const f=fixture(),base=context.saveProgramWithSchedule(f.store,f.program,f.schedule,'2026-10-29').schedule;
+ const count=f.store.schedulesOn('2026-11-11').length,rows=f.store.splitScheduleWeekdays(base.id,'2026-11-09');
+ assert.equal(rows.length,3);assert.equal(f.store.find('schedules',base.id).validTo,'2026-11-08');assert.equal(f.store.schedulesOn('2026-11-11').length,count);assert.ok(rows.every(s=>s.validTo==='2026-12-31'));
+});

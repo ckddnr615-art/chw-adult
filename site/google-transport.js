@@ -3,9 +3,13 @@
  const config=window.GOOGLE_SHARED_CONFIG;if(!config)return;
  const originalFetch=window.fetch.bind(window),channel=crypto.randomUUID(),pending=new Map();
  let peer=null,peerOrigin='',frame,readyPromise,token='';
- const tokenKey='ch-google-session:'+config.webAppUrl;
+ const tokenKey='ch-google-session:'+config.webAppUrl,expiryKey=tokenKey+':expires';
+ let expiresAt=0;
+ try{expiresAt=Number(sessionStorage.getItem(expiryKey))||0}catch{}
+ window.googleSessionInfo=()=>({authenticated:!!token,expiresAt});
+ function announceSession(){window.dispatchEvent?.(new Event('ch-session-change'))}
  try{token=sessionStorage.getItem(tokenKey)||''}catch{}
- function saveToken(value){token=value||'';try{if(token)sessionStorage.setItem(tokenKey,token);else sessionStorage.removeItem(tokenKey)}catch{}}
+ function saveToken(value,expiry=0){token=value||'';expiresAt=token?expiry:0;try{if(token){sessionStorage.setItem(tokenKey,token);sessionStorage.setItem(expiryKey,String(expiresAt))}else{sessionStorage.removeItem(tokenKey);sessionStorage.removeItem(expiryKey)}}catch{}announceSession()}
  function allowedGoogleOrigin(origin){try{const u=new URL(origin);return u.protocol==='https:'&&(u.hostname==='script.google.com'||u.hostname==='script.googleusercontent.com'||u.hostname.endsWith('.googleusercontent.com'))}catch{return false}}
  function connect(){
   if(readyPromise)return readyPromise;
@@ -30,7 +34,7 @@
   let body={};try{if(options.body)body=JSON.parse(options.body)}catch{return new Response(JSON.stringify({error:'요청 형식 오류'}),{status:400,headers:{'Content-Type':'application/json'}})}
   try{
    const result=await rpc(url.pathname+url.search,options.method||'GET',body);
-   if(result.body?.token){saveToken(result.body.token);delete result.body.token}if(result.status===401)saveToken('');
+   if(result.body?.token){saveToken(result.body.token,Number(result.body.expiresAt)||Date.now()+14400000);delete result.body.token}if(result.status===401)saveToken('');
    if(result.binary){const bytes=Uint8Array.from(atob(result.binary),c=>c.charCodeAt(0));return new Response(bytes,{status:result.status||200,headers:{'Content-Type':result.mime}})}
    return new Response(JSON.stringify(result.body),{status:result.status||200,headers:{'Content-Type':'application/json;charset=utf-8'}});
   }catch(error){return new Response(JSON.stringify({ok:false,error:error.message}),{status:503,headers:{'Content-Type':'application/json'}})}

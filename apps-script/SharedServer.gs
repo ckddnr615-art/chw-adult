@@ -54,7 +54,7 @@ function sharedLogin_(password,channel,username){
  if(!valid){cache.put(key,String(count+1),900);return sharedReply_({error:'직원 아이디와 비밀번호를 확인해 주세요.'},401)}
  cache.remove(key);var token=Utilities.getUuid()+Utilities.getUuid();
  cache.put('admin:'+sharedHash_(token),staffId?'staff:'+staffId:'1',14400);
- return sharedReply_({ok:true,token,staffId:staffId});
+ return sharedReply_({ok:true,token,staffId:staffId,expiresAt:Date.now()+14400000});
 }
 function doGet(e){
  var stage='허용 사이트 설정(SITE_ORIGINS)';

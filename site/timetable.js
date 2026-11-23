@@ -201,7 +201,7 @@ function updateProgramWithSchedule(store,programId,scheduleId,programFields,sche
 }
 function openProgramRegistration(programId='',selectedScheduleId='',draft=null){
  const editing=!!programId,item=editing?management.find('programs',programId):{};
- const schedules=editing?management.list('schedules').filter(s=>s.programId===programId&&(!s.validTo||s.validTo>=date)&&(!s.date||s.date>=date)):[];
+ const schedules=editing?management.list('schedules').filter(s=>s.programId===programId&&(!s.validFrom||!s.validTo||s.validFrom<=s.validTo)&&(!s.validTo||s.validTo>=date)&&(!s.date||s.date>=date)):[];
  const selectedSchedule=selectedScheduleId==='new'?null:schedules.find(s=>s.id===selectedScheduleId)||schedules[0],initial=selectedSchedule||{};
  const name=draft?.name??item.name??'',areaId=draft?.areaId??item.areaId??programAreaFilter,staffIds=draft?.staffIds??initial.facilitatorIds??item.facilitatorIds??[];
  const applyFrom=initial.validFrom&&initial.validFrom>date?initial.validFrom:date;

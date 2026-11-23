@@ -11,3 +11,10 @@ function transport(url='https://script.google.com/macros/s/test/exec'){
 test('정적 Google 전송은 비밀번호·세션을 URL에 넣지 않고 응답 후 세션을 전달한다',async()=>{const e=transport(),login=await e.window.fetch('/api/integration-login',{method:'POST',body:JSON.stringify({password:'private-test-password'})});assert.equal(login.status,200);assert.deepEqual(await login.json(),{ok:true});assert.equal(e.getFrameUrl().includes('private-test-password'),false);assert.equal(e.getFrameUrl().includes('test-session-token'),false);const status=await e.window.fetch('/api/team/status');assert.equal((await status.json()).authenticated,true);assert.equal(e.sent[1].message.request.token,'test-session-token-32-characters-long');assert.equal(e.sent[0].targetOrigin,'https://script.googleusercontent.com')});
 test('Google 웹앱 주소 미설정은 로컬 성공으로 가장하지 않고 연결 오류를 반환한다',async()=>{const e=transport(''),response=await e.window.fetch('/api/team/status');assert.equal(response.status,503);assert.match((await response.json()).error,/주소/);assert.equal(e.sent.length,0)});
 test('정적 파일 요청은 Google로 보내지 않는다',async()=>{const e=transport(),response=await e.window.fetch('/styles.css');assert.equal(await response.text(),'static');assert.equal(e.sent.length,0)});
+
+test('로그인 후 4시간 제한 시각을 기록하고 후속 요청이 시간을 임의로 연장하지 않는다',async()=>{
+ const e=transport(),before=Date.now();await e.window.fetch('/api/integration-login',{method:'POST',body:'{}'});
+ const first=e.window.googleSessionInfo();assert.equal(first.authenticated,true);assert.ok(first.expiresAt>=before+14400000&&first.expiresAt<=Date.now()+14400000);
+ assert.ok([...e.storage.keys()].some(key=>key.endsWith(':expires')));
+ await e.window.fetch('/api/team/status');assert.equal(e.window.googleSessionInfo().expiresAt,first.expiresAt);
+});
