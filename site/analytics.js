@@ -39,8 +39,7 @@ function dashboardCalendar(){
  const cells=Array.from({length:offset},()=>'<span class="calendar-empty" aria-hidden="true"></span>');
  for(let n=1;n<=monthDays(month);n++){
   const day=month+'-'+String(n).padStart(2,'0'),notes=calendarEntries(day);
-  const preview=notes.slice(0,2).map(note=>[calendarEntryLabel(note),note.text].filter(Boolean).join(' ')).join('\n');
-  cells.push('<button type="button" data-calendar-day="'+day+'" aria-pressed="'+(chosen===day)+'" '+(day===date?'aria-current="date"':'')+'><span>'+n+(day===date?'<small>오늘</small>':'')+'</span>'+(preview?'<span class="calendar-note-preview">'+esc(preview)+'</span><small class="calendar-entry-count">일정 '+notes.length+'건</small>':'')+'</button>');
+  cells.push('<button type="button" data-calendar-day="'+day+'" aria-label="'+day+' 일정 '+notes.length+'건" aria-pressed="'+(chosen===day)+'" '+(day===date?'aria-current="date"':'')+'><span>'+n+(day===date?'<small>오늘</small>':'')+'</span>'+'<small class="calendar-entry-count">일정 '+notes.length+'건</small>'+'</button>');
  }
  const notes=calendarEntries(chosen);
  const list=notes.map(note=>'<li><div><strong>'+esc(calendarEntryLabel(note)||'등록된 일정')+'</strong><p>'+esc(note.text)+'</p></div><div class="calendar-entry-actions"><button type="button" class="secondary" data-edit-calendar="'+esc(note.id)+'">수정</button><button type="button" class="secondary danger" data-delete-calendar="'+esc(note.id)+'">삭제</button></div></li>').join('');
@@ -55,12 +54,12 @@ function bindDashboardCalendar(){
  const day=calendarDay.startsWith(month)?calendarDay:date.startsWith(month)?date:month+'-01';
  let editing=null;
  const reset=()=>{
-  editing=null;form.reset();$('#calendarFormTitle').textContent='일정 등록';$('#saveCalendarEntry').textContent='일정 등록';$('#cancelCalendarEdit').hidden=true;$('#calendarNoteFeedback').textContent='';
+  editing=null;delete form.dataset.editing;form.reset();$('#calendarFormTitle').textContent='일정 등록';$('#saveCalendarEntry').textContent='일정 등록';$('#cancelCalendarEdit').hidden=true;$('#calendarNoteFeedback').textContent='';
  };
  $('#cancelCalendarEdit').onclick=reset;
  document.querySelectorAll('[data-edit-calendar]').forEach(button=>button.onclick=()=>{
   const note=management.data.calendarNotes.find(row=>row.id===button.dataset.editCalendar);
-  editing=JSON.parse(JSON.stringify(note));
+  editing=JSON.parse(JSON.stringify(note));form.dataset.editing=note.id;
   $('#calendarStaffName').value=note.staffName||'';$('#calendarTime').value=note.time||'';$('#calendarNote').value=note.text;
   $('#calendarFormTitle').textContent='일정 수정';$('#saveCalendarEntry').textContent='수정 저장';$('#cancelCalendarEdit').hidden=false;$('#calendarNoteFeedback').textContent='';$('#calendarNote').focus({preventScroll:true});
  });

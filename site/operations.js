@@ -308,5 +308,11 @@ const initialHash=location.hash;
 async function bootTeam(){try{const response=await fetch('/api/team/status',{credentials:'same-origin'});if(!response.ok)throw Error();const status=await response.json();if(status.service!=='ch-team-api')throw Error();Object.assign(team,status);team.active=false;if(team.initialized){adminSession=!!team.authenticated;await loadTeamMonth(date.slice(0,7),true);if(adminSession&&initialHash!=='#login')history.replaceState(null,'',initialHash||'#kiosk')}}catch{team.configured=true;team.error='Google 공동 저장 연결 설정을 확인해 주세요. google-config.js의 웹앱 주소와 Apps Script 배포를 확인하세요.';adminSession=false}finally{team.loading=false;render()}}
 const teamBoot=bootTeam();
 render();
-setInterval(async()=>{if(!team.active||document.hidden||configPending||configSaving||location.hash==='#appearance')return;try{await loadTeamMonth(location.hash==='#reports'?reportMonth:date.slice(0,7));if(!$('#dialog').open&&!document.activeElement?.closest('#summaryAttendanceForm,#participantSearch,#calendarNoteForm'))render()}catch{team.error='공유 자료 확인 실패 · 기기의 현재 자료는 유지됩니다.';showTeamStatus()}},60000);
-document.addEventListener('visibilitychange',()=>{if(!document.hidden&&team.active&&!configPending&&location.hash!=='#appearance')void loadTeamMonth().then(()=>{if(!$('#dialog').open)render()}).catch(()=>{})});
+function sharedScreenCanRefresh(){
+ if($('#dialog')?.open||document.activeElement?.closest('#summaryAttendanceForm,#participantSearch,#calendarNoteForm,[data-quick-schedule]'))return false;
+ const calendar=$('#calendarNoteForm');
+ if(calendar&&(calendar.dataset.editing||[...calendar.querySelectorAll('input,textarea')].some(input=>input.value.trim())))return false;
+ return true;
+}
+setInterval(async()=>{if(!team.active||document.hidden||configPending||configSaving||location.hash==='#appearance')return;try{await loadTeamMonth(location.hash==='#reports'?reportMonth:date.slice(0,7));if(sharedScreenCanRefresh())render()}catch{team.error='공유 자료 확인 실패 · 기기의 현재 자료는 유지됩니다.';showTeamStatus()}},60000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden&&team.active&&!configPending&&!configSaving&&location.hash!=='#appearance')void loadTeamMonth().then(()=>{if(sharedScreenCanRefresh())render()}).catch(()=>{})});
