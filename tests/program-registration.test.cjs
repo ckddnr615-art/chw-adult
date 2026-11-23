@@ -113,3 +113,24 @@ test('참여자별 실적 담당은 한 명만 선택하며 적용일 전후 담
  const own=groups(f.store,{},'2026-11-11',second).find(group=>group.id===schedule.programId);assert.equal(own.sessions.flatMap(session=>session.rows).length,1);
  const other=groups(f.store,{},'2026-11-11',first).find(group=>group.id===schedule.programId);assert.equal(other.sessions.flatMap(session=>session.rows).length,0);
 });
+
+test('미래 일정의 시작일을 오늘로 앞당기면 최초 참여자 배정도 함께 앞당기고 이후 배정은 유지한다',()=>{
+ const f=fixture(),start='2027-01-11',end='2027-12-24';
+ const created=context.saveProgramWithSchedule(f.store,f.program,{...f.schedule,validFrom:start,validTo:end},'2026-11-23').schedule;
+ f.store.data.enrollments.push({id:'start-a',memberId:'m1',scheduleId:created.id,from:start,to:'',active:true,reportStaffId:'담당자 유지'},{id:'start-b',memberId:'m2',scheduleId:created.id,from:'2027-02-01',to:'',active:true});
+ f.store.data.days={'2026-11-20:m1':{memberId:'m1',date:'2026-11-20'}};
+ f.store.data.entries.push({id:'record-keep',scheduleId:created.id,memberId:'m1',date:'2026-11-20',checked:true});
+ const days=JSON.stringify(f.store.data.days),entries=JSON.stringify(f.store.data.entries),count=f.store.data.schedules.length;
+ const next=f.store.changeScheduleStart(created.id,'2026-11-23','2026-11-23');
+ assert.equal(next.id,created.id);assert.equal(next.validFrom,'2026-11-23');assert.equal(next.validTo,end);assert.equal(f.store.data.schedules.length,count);
+ assert.equal(f.store.data.enrollments.find(e=>e.id==='start-a').from,'2026-11-23');assert.equal(f.store.data.enrollments.find(e=>e.id==='start-a').reportStaffId,'담당자 유지');assert.equal(f.store.data.enrollments.find(e=>e.id==='start-b').from,'2027-02-01');
+ assert.equal(JSON.stringify(f.store.data.days),days);assert.equal(JSON.stringify(f.store.data.entries),entries);
+ assert.ok(f.store.schedulesOn('2026-11-23').some(s=>s.id===created.id));
+});
+
+test('시작일 수정은 잘못된 날짜·종료일 초과·이전 일정 이력과 겹침을 막는다',()=>{
+ const f=fixture(),base=context.saveProgramWithSchedule(f.store,f.program,f.schedule,'2026-10-29').schedule;
+ const before=JSON.stringify(f.store.data);assert.throws(()=>f.store.changeScheduleStart(base.id,'2026-02-30','2026-11-23'),/올바른/);assert.throws(()=>f.store.changeScheduleStart(base.id,'2027-01-01','2026-11-23'),/종료일/);assert.equal(JSON.stringify(f.store.data),before);
+ const next=f.store.reviseSchedule(base.id,{location:'다른 장소'},'2026-11-09');assert.throws(()=>f.store.changeScheduleStart(next.id,'2026-11-02','2026-11-23'),/이전 일정/);
+ const changed=f.store.changeScheduleStart(next.id,'2026-11-12','2026-11-23');assert.equal(changed.validFrom,'2026-11-12');
+});

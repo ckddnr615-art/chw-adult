@@ -29,18 +29,18 @@
       const dated=daySchedules.filter(s=>this.find('schedules',s.id)?.date===d&&s.audienceMode==='individual');
       return this.list('members').filter(member=>rawEligible(schedule,member)&&(this.find('schedules',schedule.id)?.date===d||!dated.some(s=>s.start<schedule.end&&schedule.start<s.end&&rawEligible(s,member))));
     }
-    assignParticipants(scheduleId,memberIds,from,mode,reportOwners=null){
+    assignParticipants(scheduleId,memberIds,from,mode,reportOwners=null,{allowUnassignedReportOwners=false}={}){
       let schedule=this.find('schedules',scheduleId);if(!schedule||schedule.active===false)throw Error('사용 중인 일정을 선택해 주세요.');
       if(!['community','individual'].includes(mode))throw Error('배정 방식을 확인해 주세요.');
       if(!/^\d{4}-\d{2}-\d{2}$/.test(from)||(schedule.validFrom&&from<schedule.validFrom)||(schedule.validTo&&from>schedule.validTo)||(schedule.date&&from!==schedule.date))throw Error('배정 적용일이 일정 기간과 맞지 않습니다.');
       const ids=[...new Set(memberIds)];if(ids.some(id=>!this.list('members').some(m=>m.id===id)))throw Error('사용 중인 참여자를 선택해 주세요.');
       if(mode==='individual'&&!ids.length)throw Error('참여자를 한 명 이상 선택해 주세요.');
-      if(schedule.reportAssignmentMode==='participant'){if(mode!=='individual')throw Error('참여자별 실적 담당은 참여자 개별 배정으로 설정해 주세요.');for(const memberId of ids){const owner=reportOwners&&reportOwners[memberId];if(!(schedule.facilitatorIds||[]).includes(owner)||!this.list('staff').some(staff=>staff.id===owner))throw Error('선택한 참여자마다 프로그램 실적 담당 직원 한 명을 지정해 주세요.')}}
+      if(schedule.reportAssignmentMode==='participant'){if(mode!=='individual')throw Error('참여자별 실적 담당은 참여자 개별 배정으로 설정해 주세요.');for(const memberId of ids){const owner=reportOwners&&reportOwners[memberId];if(!owner&&allowUnassignedReportOwners)continue;if(!(schedule.facilitatorIds||[]).includes(owner)||!this.list('staff').some(staff=>staff.id===owner))throw Error('선택한 참여자마다 프로그램 실적 담당 직원 한 명을 지정해 주세요.')}}
       if(this.data.enrollments.some(e=>e.scheduleId===scheduleId&&e.active!==false&&e.from>from))throw Error('이미 예약된 미래 배정이 있습니다. 적용일을 확인해 주세요.');
       if(schedule.audienceMode!==mode&&!schedule.date){schedule=this.reviseSchedule(scheduleId,{audienceMode:mode},from);scheduleId=schedule.id}
       const before={mode:schedule.audienceMode,enrollments:clone(this.data.enrollments.filter(e=>e.scheduleId===scheduleId))};
       for(const e of this.data.enrollments.filter(e=>e.scheduleId===scheduleId&&e.active!==false&&(!e.to||e.to>=from))){if(e.from>=from)e.active=false;else e.to=ManagementStore.addDays(from,-1)}
-      for(const memberId of ids)this.data.enrollments.push({id:uid(),scheduleId,memberId,from,to:'',active:true,...(schedule.reportAssignmentMode==='participant'?{reportStaffId:reportOwners[memberId]}:{})});
+      for(const memberId of ids)this.data.enrollments.push({id:uid(),scheduleId,memberId,from,to:'',active:true,...(schedule.reportAssignmentMode==='participant'?{reportStaffId:reportOwners[memberId]||''}:{})});
       schedule.audienceMode=mode;this.audit('참여자 배정','schedules',scheduleId,before,{mode,memberIds:ids,from});
     }
     setDayOverride(scheduleId,d,fields){
@@ -72,6 +72,21 @@
       for(const enrollment of this.data.enrollments.filter(e=>e.scheduleId===id&&e.active!==false&&(!e.to||e.to>=from))){this.data.enrollments.push({...clone(enrollment),id:uid(),scheduleId:next.id,from:enrollment.from>from?enrollment.from:from});if(enrollment.from>=from)enrollment.active=false;else enrollment.to=ManagementStore.addDays(from,-1)}
       for(const override of this.data.scheduleOverrides.filter(o=>o.scheduleId===id&&o.active!==false&&o.date>=from)){this.data.scheduleOverrides.push({...clone(override),id:uid(),scheduleId:next.id});override.active=false}
       this.audit('반복 일정 변경','schedules',id,before,{previous:old,next});return next;
+    }
+    changeScheduleStart(id,from,today){
+      const schedule=this.find('schedules',id);
+      if(!schedule||schedule.active===false||schedule.date)throw Error('시작일을 수정할 반복 일정을 선택해 주세요.');
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(from)||!Number.isFinite(Date.parse(from+'T12:00:00Z'))||new Date(from+'T12:00:00Z').toISOString().slice(0,10)!==from)throw Error('올바른 시작일을 선택해 주세요.');
+      if(schedule.validTo&&from>schedule.validTo)throw Error('시작일은 종료일 이후로 설정할 수 없습니다.');
+      if(from===schedule.validFrom)return schedule;
+      const series=schedule.seriesId||schedule.id;
+      if(this.list('schedules').some(other=>other.id!==id&&(other.seriesId||other.id)===series&&other.validTo&&other.validTo<(schedule.validFrom||'9999-12-31')&&other.validTo>=from))throw Error('이전 일정 기간과 겹칩니다. 이전 일정이 끝난 다음 날짜부터 선택해 주세요.');
+      const backup=clone(this.data);
+      try{
+        const previous=schedule.validFrom,saved=this.save('schedules',id,{validFrom:from},today);
+        for(const enrollment of this.data.enrollments.filter(row=>row.scheduleId===id&&row.active!==false&&row.from===previous&&(!row.to||row.to>=from))){enrollment.from=from}
+        this.audit('일정 시작일 수정','schedules',id,{validFrom:previous||''},{validFrom:from});return saved;
+      }catch(error){this.data=backup;throw error}
     }
     splitScheduleWeekdays(id,from){
       const backup=clone(this.data);

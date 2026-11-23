@@ -233,7 +233,7 @@ function programStaffQuickEditor(schedule){
  const selected=draft?.assignments?.[day]??schedule.reportStaffByWeekday?.[day]??schedule.reportStaffId??(ids.length===1?ids[0]:'');
  const staff=management.data.staff.filter(staff=>staff.active!==false||staff.id===selected);
  return `<label>${schedule.date?'당일 담당': '일월화수목금토'[day]+'요일 담당'}<select data-quick-staff="${day}" aria-label="${esc(program?.name||'프로그램')} ${'일월화수목금토'[day]}요일 담당"><option value="">담당 직원 선택</option>${sortedOpts(staff,selected,staff=>staff.name+(staff.active===false?' (삭제)':''))}</select></label>`;
- }).join('')}<label>변경 적용일<input type="date" data-quick-from value="${esc(draft?.from||schedule.date||(schedule.validFrom&&schedule.validFrom>date?schedule.validFrom:date))}" ${schedule.date?'readonly':''} ${schedule.validFrom?'min="'+esc(schedule.validFrom)+'"':''} ${schedule.validTo?'max="'+esc(schedule.validTo)+'"':''}></label><button type="button" class="primary" data-quick-staff-save ${!draft||draft.saving?'disabled':''}>${draft?.saving?'저장 중…':'담당자 저장'}</button><small data-quick-staff-error role="status">${esc(draft?.error||'')}</small></div>`;
+ }).join('')}<label>변경 적용일<input type="date" data-quick-from value="${esc(draft?.from||schedule.date||(schedule.validFrom&&schedule.validFrom>date?schedule.validFrom:date))}" ${schedule.date?'readonly':''} ${schedule.validFrom?'min="'+esc(schedule.validFrom)+'"':''} ${schedule.validTo?'max="'+esc(schedule.validTo)+'"':''}></label>${schedule.validFrom&&schedule.validFrom>date?`<p class="formhint">${esc(schedule.validFrom)}부터 시작하는 일정입니다. 시작일 전인 오늘은 선택할 수 없습니다.</p>`:''}<button type="button" class="primary" data-quick-staff-save ${!draft||draft.saving?'disabled':''}>${draft?.saving?'저장 중…':'담당자 저장'}</button><small data-quick-staff-error role="status">${esc(draft?.error||'')}</small></div>`;
 }
 function updateScheduleStaff(store,scheduleId,assignments,from){
  const schedule=store.find('schedules',scheduleId);if(!schedule||schedule.active===false)throw Error('변경할 일정을 다시 확인해 주세요.');
@@ -244,6 +244,7 @@ function updateScheduleStaff(store,scheduleId,assignments,from){
  return schedule.date?store.save('schedules',scheduleId,fields,from):store.reviseSchedule(scheduleId,fields,from);
 }
 function bindProgramStaffQuickEditors(){
+ document.querySelectorAll('[data-program-start-edit]').forEach(button=>button.onclick=()=>openScheduleStartEditor(button.dataset.programStartEdit));
  document.querySelectorAll('[data-program-add-schedule]').forEach(button=>button.onclick=()=>openProgramRegistration(button.dataset.programAddSchedule,'new'));
  document.querySelectorAll('[data-split-weekdays]').forEach(button=>button.onclick=()=>{
   const id=button.dataset.splitWeekdays,schedule=management.find('schedules',id),from=programStaffDrafts.get(id)?.from||(schedule.validFrom&&schedule.validFrom>date?schedule.validFrom:date);

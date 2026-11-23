@@ -244,3 +244,16 @@ body.participant-mode dialog:has(.kiosk-photo-grid){width:min(720px,calc(100% - 
  .assignment-owner-bulk>label{display:grid;gap:6px;flex:1 1 180px}
  .assignment-owner-bulk select{width:100%}
 }
+/* Grid tracks must size to the cards, rather than squeeze every member into max-height. */
+@media screen{
+ .assignment-picker .member-checks{grid-auto-rows:max-content;align-items:start;align-content:start;overflow-y:auto;overflow-x:hidden;min-height:180px;max-height:44dvh;overscroll-behavior:contain}
+ .assignment-picker .assignment-member-row{min-height:108px;overflow:visible;align-self:start;flex-shrink:0}
+ .assignment-picker .assignment-member-row .member-check{flex:0 0 auto;min-height:104px;box-sizing:border-box;align-items:flex-start}
+ .assignment-picker .assignment-report-owner{flex:0 0 auto;min-height:78px;box-sizing:border-box}
+ .assignment-picker .assignment-person{display:block;min-width:0;overflow-wrap:anywhere;white-space:normal}
+ .assignment-picker .assignment-person strong{display:block;font-size:16px;line-height:1.6}
+ .assignment-picker .assignment-person small{display:block;font-size:13px;line-height:1.6}
+ .assignment-owner-bulk[hidden],#assignmentOwnerHelp[hidden]{display:none}
+ #assignmentOwnerCount{margin:0;font-size:15px;color:#345591;line-height:1.7}
+ @media(max-width:600px){.assignment-picker .member-checks{grid-template-columns:1fr;max-height:42dvh}.assignment-owner-bulk>button{width:100%}}
+}
