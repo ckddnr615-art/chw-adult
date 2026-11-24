@@ -47,11 +47,17 @@ function replaceKioskDialog(content){
  if($('#dialog').open)$('#dialogcontent').innerHTML=content;
  else modal(content);
  $('#closeDialog').textContent='닫기';
+ $('#dialog').scrollTop=0;$('#dialogcontent').scrollTop=0;
+}
+function kioskPhotoCheckinLabel(member,schedule){
+ if(status(member)!=='출석')return '';
+ if(!schedule)return '✓ 출석 기록 있음';
+ return (kioskProgramCheckins[kioskProgramKey(schedule)]||[]).includes(member.id)?'✓ 출석 완료':'';
 }
 function showKioskPhotoPicker(schedule,page=0,communityId=''){
  const members=(schedule?publicProgramRoster(schedule).members:management.list('members').filter(member=>!communityId||management.memberGroupAt(member,date)===communityId)).slice().sort((a,b)=>a.name.localeCompare(b.name,'ko'));
  const pageSize=12,start=page*pageSize;
- replaceKioskDialog(`<h2 id="kioskPhotoTitle" tabindex="-1">내 사진을 눌러 주세요</h2>${schedule?'<p>'+esc(schedule.program.name)+'</p>':communityId?'<p>'+esc(management.communityName(communityId))+'</p>':''}<div class="kiosk-photo-grid">${members.slice(start,start+pageSize).map(member=>`<div class="kiosk-photo-option"><button type="button" class="personcard" data-kiosk-person="${esc(member.id)}">${photoMarkup(member)}<b>${esc(member.name)}</b></button><button type="button" class="secondary" aria-label="${esc(member.name)} 이름 듣기" data-kiosk-read="${esc(member.name)}">🔊</button></div>`).join('')||'<p>오늘 등록된 참여자가 없어요.</p>'}</div>${members.length>pageSize?`<div class="kiosk-photo-pages"><button type="button" class="secondary" id="previousPhotos" ${page===0?'disabled':''}>← 이전 사진</button><button type="button" class="secondary" id="nextPhotos" ${start+pageSize>=members.length?'disabled':''}>다음 사진 →</button></div>`:''}`);
+ replaceKioskDialog(`<h2 id="kioskPhotoTitle" tabindex="-1">내 사진을 눌러 주세요</h2>${schedule?'<p>'+esc(schedule.program.name)+'</p>':communityId?'<p>'+esc(management.communityName(communityId))+'</p>':''}<div class="kiosk-photo-grid">${members.slice(start,start+pageSize).map(member=>`<div class="kiosk-photo-option"><button type="button" class="personcard ${kioskPhotoCheckinLabel(member,schedule)?'has-checkin':''}" data-kiosk-person="${esc(member.id)}">${photoMarkup(member)}<b>${esc(member.name)}</b>${kioskPhotoCheckinLabel(member,schedule)?`<span class="kiosk-photo-completed">${kioskPhotoCheckinLabel(member,schedule)}</span>`:''}</button><button type="button" class="secondary" aria-label="${esc(member.name)} 이름 듣기" data-kiosk-read="${esc(member.name)}">🔊</button></div>`).join('')||'<p>오늘 등록된 참여자가 없어요.</p>'}</div>${members.length>pageSize?`<div class="kiosk-photo-pages"><button type="button" class="secondary" id="previousPhotos" ${page===0?'disabled':''}>← 이전 사진</button><button type="button" class="secondary" id="nextPhotos" ${start+pageSize>=members.length?'disabled':''}>다음 사진 →</button></div>`:''}`);
  $('#kioskPhotoTitle').focus();
  $('#dialogcontent').querySelectorAll('[data-kiosk-person]').forEach(button=>button.onclick=()=>openPublicCheckin(button.dataset.kioskPerson,schedule,communityId));
  $('#dialogcontent').querySelectorAll('[data-kiosk-read]').forEach(button=>button.onclick=()=>say(button.dataset.kioskRead,true));
@@ -95,11 +101,10 @@ function openPublicCheckin(id,requestedSchedule,communityId=''){
    refreshKioskAfterDialog();
    if(!isCurrent())return;
    if(status(member)==='결석'){showAbsenceNotice();return}
-   replaceKioskDialog(`<div role="status" class="kiosk-checkin-success"><span class="successmark" aria-hidden="true">✓</span><h2>출석이 완료됐어요.</h2><p>${esc(schedule.program.name)}</p></div>`);
+   replaceKioskDialog(`<div role="status" class="kiosk-checkin-success"><span class="successmark" aria-hidden="true">✓</span><h2 tabindex="-1" id="kioskCheckinComplete">${esc(member.name)} 님,<br>출석이 완료됐어요.</h2><p>${esc(schedule.program.name)}</p><p>${esc(prettyDate)}</p></div>`);
+   $('#closeDialog').textContent='확인했어요';
+   $('#kioskCheckinComplete').focus({preventScroll:true});
    say(member.name+' 님, '+schedule.program.name+' 출석이 완료됐어요.');
-   const success=$('#dialogcontent .kiosk-checkin-success');
-   const timer=setTimeout(()=>{if(dialog.open&&dialog.contains(success))dialog.close()},4000);
-   dialog.addEventListener('close',()=>clearTimeout(timer),{once:true});
   }catch(error){
    if(error.currentStatus!==undefined)refreshKioskAfterDialog();
    if(!isCurrent())return;

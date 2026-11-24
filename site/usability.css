@@ -281,3 +281,10 @@ body.participant-mode dialog:has(.kiosk-photo-grid){width:min(720px,calc(100% - 
  .member-name-cell{min-width:180px}
  @media(max-width:600px){.case-manager-bulk-controls>button,.case-manager-bulk-controls>label{width:100%;max-width:none}.case-manager-bulk-controls>label{flex-basis:100%}}
 }
+@media screen{
+ .participant-mode .kiosk-checkin-success{text-align:center;padding:12px 0}
+ .participant-mode .kiosk-checkin-success h2{font-size:clamp(27px,4vw,34px);line-height:1.5;margin:18px 0}
+ .participant-mode .kiosk-checkin-success p{font-size:20px;line-height:1.6}
+ .participant-mode .kiosk-photo-grid .personcard.has-checkin{border-color:#86ad90;background:#eff7f0}
+ .participant-mode .kiosk-photo-completed{display:block;font-size:17px;font-weight:700;line-height:1.5;color:#286747;margin-top:8px}
+}
