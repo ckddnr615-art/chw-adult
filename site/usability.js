@@ -148,7 +148,7 @@ function kioskAffiliationChoices(){
 }
 kiosk=function(){
  const closed=management.holidayName(date),holidayPending=!holidayYears.has(date.slice(0,4));
- const ready=team.active&&team.programCheckin&&!holidayPending&&!closed;
+ const ready=team.active&&(!team.dataDate||team.dataDate===date)&&team.programCheckin&&!holidayPending&&!closed;
  const schedules=ready?management.schedulesOn(date):[],period=activeKioskPeriod(schedules);
  const selected=ready?selectedKioskProgram():null;
  const schedule=selected&&ManagementStore.scheduleSlot(selected)===period?selected:null;

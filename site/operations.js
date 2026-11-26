@@ -33,16 +33,25 @@ async function loadTeamMonth(month=date.slice(0,7),full=false){
  try{return await entry.promise}finally{if(pending.get(month)===entry)pending.delete(month)}
 }
 async function readTeamMonth(month,full){
-  await ensureHolidayYear(month.slice(0,4)).catch(()=>{});
-  const since=full?0:monthRevisions.get(month)||0,response=await fetch(`/api/team/state?month=${month}&since=${since}`,{credentials:'same-origin'});if(!response.ok)throw Error('공유 자료를 읽지 못했습니다.');const data=await response.json();if(!data.initialized)return false;
+  const holiday=ensureHolidayYear(month.slice(0,4)).catch(()=>{}),since=full||!team.authenticated&&team.dataDate!==date?0:monthRevisions.get(month)||0;
+  const [response]=await Promise.all([fetch(`/api/team/state?month=${month}&since=${since}`,{credentials:'same-origin'}),holiday]);
+  if(!response.ok)throw Error('공유 자료를 읽지 못했습니다.');const data=await response.json();return applyTeamSnapshot(month,data);
+}
+function applyTeamSnapshot(month,data){
+  if(!data.initialized)return false;
   if(data.revision<Math.max(latestAttendanceRevision,...monthRevisions.values()))return true;
+  if(data.scope==='today'){
+   management.data.entries=[];management.data.audit=[];
+   for(const key of Object.keys(records))if(!key.startsWith(data.date+':'))delete records[key];
+   for(const key of Object.keys(management.data.days))if(!key.startsWith(data.date+':'))delete management.data.days[key];
+  }
   if(data.purgedProgramIds?.length){
    management.data.entries=management.data.entries.filter(entry=>!data.purgedProgramIds.includes(entry.programId));
    if(typeof programReportState!=='undefined'&&programReportState.result&&(programReportState.result.kind==='all'&&programReportState.result.rows.some(row=>data.purgedProgramIds.includes(row.id))||data.purgedProgramIds.includes(programReportState.result.programId)))programReportState.result=null;
   }
   if(data.programCheckins){kioskProgramCheckins=data.programCheckins;kioskProgramSnapshotRevision=data.revision}
   if(!data.unchanged){applyingTeam=true;try{if(data.config&&!configPending&&!configSaving){for(const type of CONFIG_TYPES)management.data[type]=data.config[type]||[];management.data.timetableVersion=1;configBaseline=currentConfig();management.upgradeTimetable()}Object.assign(records,data.records);Object.assign(management.data.days,data.days);for(const entry of data.entries||[]){const index=management.data.entries.findIndex(e=>e.id===entry.id);if(index<0)management.data.entries.push(entry);else management.data.entries[index]=entry}if(adminSession||team.authenticated)management.data.audit=(data.audit||[]).slice().sort((a,b)=>a.time.localeCompare(b.time));originalPersist();refreshCollections();lastScheduleJSON=JSON.stringify([management.data.schedules,management.data.scheduleOverrides,management.data.closures,management.data.programs.map(p=>[p.id,p.enabledHistory||[]])])}finally{applyingTeam=false}}
-  if(!configPending&&!configSaving)monthRevisions.set(month,data.revision);team.active=true;team.initialized=true;team.lastCheckedAt=Date.now();return true;
+  if(!configPending&&!configSaving)monthRevisions.set(month,data.revision);team.active=true;team.initialized=true;team.dataDate=data.date||date;team.lastCheckedAt=Date.now();return true;
 }
 function configChanges(snapshot){const changes=[];for(const type of CONFIG_TYPES){const before=new Map((configBaseline?.[type]||[]).map(x=>[x.id,x]));for(const after of snapshot[type])if(JSON.stringify(before.get(after.id)||null)!==JSON.stringify(after))changes.push({type,id:after.id,before:before.get(after.id)||null,after})}return changes}
 function memberEditFields(member){
@@ -386,7 +395,30 @@ async function refreshSharedChanges(){
  }catch(error){toast(error.message)}finally{sharedRefreshBusy=false;syncSharedRefreshControl()}
 }
 const initialHash=location.hash;
-async function bootTeam(){try{const response=await fetch('/api/team/status',{credentials:'same-origin'});if(!response.ok)throw Error();const status=await response.json();if(status.service!=='ch-team-api')throw Error();Object.assign(team,status);team.active=false;if(team.initialized){adminSession=!!team.authenticated;await loadTeamMonth(date.slice(0,7),true);if(adminSession&&initialHash!=='#login')history.replaceState(null,'',initialHash||'#kiosk')}}catch{team.configured=true;team.error='Google 공동 저장 연결 설정을 확인해 주세요. google-config.js의 웹앱 주소와 Apps Script 배포를 확인하세요.';adminSession=false}finally{team.loading=false;render()}}
+async function bootTeam(){
+ const started=Date.now();
+ try{
+  const response=await fetch('/api/team/bootstrap',{credentials:'same-origin'});
+  if([401,404].includes(response.status)){
+   const legacy=await fetch('/api/team/status',{credentials:'same-origin'});if(!legacy.ok)throw Error('Google 연결 상태 확인 실패');const status=await legacy.json();if(status.service!=='ch-team-api')throw Error('공동 저장 응답 오류');
+   Object.assign(team,status);adminSession=!!team.authenticated;team.active=false;
+   if(team.initialized)await loadTeamMonth(date.slice(0,7),true);team.startupMode='legacy';
+  }else{
+   const data=await response.json();if(!response.ok||data.team?.service!=='ch-team-api')throw Error(data.error||'Google 초기 자료를 읽지 못했습니다.');
+   Object.assign(team,data.team);adminSession=!!team.authenticated;team.active=false;
+   if(data.date!==date){date=data.date;selectedDate=date;prettyDate=new Intl.DateTimeFormat('ko-KR',{timeZone:'Asia/Seoul',year:'numeric',month:'long',day:'numeric',weekday:'long'}).format(new Date(date+'T12:00:00+09:00'))}
+   acceptHolidayYear(date.slice(0,4),data.holidays,false);
+   if(data.initialized&&!applyTeamSnapshot(date.slice(0,7),data))throw Error('초기 자료 반영 실패');
+   team.startupMode='bootstrap';team.startupServerTiming=data.timing||{};
+  }
+  apiState={available:true,configured:!!team.googleConfigured,authenticated:!!team.authenticated};
+  if(adminSession&&initialHash!=='#login')history.replaceState(null,'',initialHash||'#kiosk');
+ }catch(error){team.configured=true;team.error=error.message||'Google 공동 저장 연결 설정을 확인해 주세요.';adminSession=false}
+ finally{
+  team.loading=false;team.startupMs=Date.now()-started;render();
+  const main=$('#main');if(main){main.dataset.startupMode=team.startupMode||'error';main.dataset.startupMs=String(team.startupMs);main.dataset.startupServerMs=String(team.startupServerTiming?.totalMs||0)}
+ }
+}
 const teamBoot=bootTeam();
 render();
 function sharedScreenCanRefresh(){

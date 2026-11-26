@@ -675,3 +675,77 @@ test('한 번도 시트에 전송되지 않은 담당 미지정 실적도 안전
  const month={records:{'2026-10-29:person-1':'출석'},days:{},entries:[entry],requests:{},reports:{},reconcile:[],audit:[]};e.context.sharedQueueReports_(month,'person-1','2026-10-29');Object.values(month.reports).forEach(r=>{r.sync='error';r.error='실적 담당 미지정'});e.context.sharedSaveMonth_(book,manifest,'2026-10',month);e.context.sharedCommit_(book,manifest);
  const plan=previewPurge(e);startPurge(e,plan);finishPurge(e);assert.equal(e.call('/api/team/state',{},'GET').body.entries.length,0);
 });
+
+test('공용 관리자와 공개 연결 상태는 운영 설정을 읽지 않고 개별 직원 상태는 검증한다',()=>{
+ const e=environment();e.login();e.call('/api/team/initialize',{management:e.model().data,records:{}});
+ let reads=0;const original=e.context.sharedConfig_;e.context.sharedConfig_=function(...args){reads++;return original(...args)};
+ assert.equal(e.call('/api/team/status',{},'GET').body.authenticated,true);assert.equal(e.call('/api/integration-status',{},'GET').body.authenticated,true);assert.equal(reads,0);
+ e.logout();assert.equal(e.call('/api/team/status',{},'GET').body.authenticated,false);assert.equal(reads,0);
+ e.context.sharedSession_=()=> 'staff:removed-staff';assert.equal(e.call('/api/team/status',{},'GET').body.authenticated,false);assert.equal(reads,1);
+});
+test('12건 일괄 반영은 문서를 다시 열지 않고 전송 이력 전체는 한 번만 읽는다',()=>{
+ const e=environment(),book=e.context.SpreadsheetApp.openById('test-book'),props=e.context.sharedProps_(),month={entries:[],reports:{}};
+ // Seed one confirmed row so the batch has an existing journal to load.
+ const source={id:'seed',memberId:'m-seed',name:'초기',date:'2026-10-28',area:'신체적 건강',communityId:'community-1',staff:'직원',start:'10:00',checked:true,version:1};e.context.writeProjectedPerformance_(source,props);
+ for(let i=0;i<12;i++){const entry={...source,id:'entry-'+i,memberId:'m-'+i,name:'이용인 '+i,date:'2026-10-29'};month.entries.push(entry);e.context.sharedQueueReports_(month,entry.memberId,entry.date)}
+ let opens=0,ledgerReads=0;const open=e.context.SpreadsheetApp.openById;e.context.SpreadsheetApp.openById=(...args)=>{opens++;return open(...args)};
+ const ledger=e.sheets.get('__CH_PERFORMANCE_V1'),get=ledger.getRange.bind(ledger);ledger.getRange=(row,col,height,width)=>{const range=get(row,col,height,width),read=range.getValues;range.getValues=function(){if(row===2&&col===1&&width===7)ledgerReads++;return read.call(this)};return range};
+ assert.equal(e.context.sharedFlushMonth_(month,12,undefined,book),12);assert.equal(opens,0);assert.equal(ledgerReads,1);
+ const destinations=ledger.rows.slice(1).map(row=>row[3]);assert.equal(new Set(destinations).size,13);assert.equal(month.entries.filter(e=>e.sync==='synced').length,12);
+});
+test('빈 실적 대기열은 시트와 전송 이력을 읽거나 행별 해시를 계산하지 않는다',()=>{
+ const e=environment();e.context.sharedReportsConfigured_=()=>{throw Error('unnecessary properties read')};e.context.sharedBook_=()=>{throw Error('unnecessary open')};e.context.sharedHash_=()=>{throw Error('unnecessary hash')};assert.equal(e.context.sharedFlushMonth_({entries:[{id:'e'}],reports:{}},12),0);
+});
+test('새 실적 동기화 상태는 원본 ID 연결로 갱신하고 다른 기록은 건드리지 않는다',()=>{
+ const e=environment(),month={entries:[{id:'one',sync:'pending'},{id:'two',sync:'pending'},{id:'other',sync:'error',error:'기존 오류'}]};e.context.sharedHash_=()=>{throw Error('unnecessary hash')};e.context.sharedApplyReportSync_(month,[{entry:{id:'r',allSourceIds:['one','two']},sync:'synced',error:''}]);assert.equal(month.entries[0].sync,'synced');assert.equal(month.entries[1].sync,'synced');assert.equal(month.entries[2].error,'기존 오류');
+});
+test('다음 처리의 캐시는 새로 만들고 외부 수동 변경 충돌을 계속 감지한다',()=>{
+ const e=environment(),props=e.context.sharedProps_(),entry={id:'one',memberId:'m',name:'이용인',date:'2026-10-29',area:'건강',communityId:'community-1',staff:'직원',checked:true,version:1};
+ e.context.writeProjectedPerformance_(entry,props);e.sheets.get('검증 실적').rows[1][0]='외부 수동 변경';assert.throws(()=>e.context.writeProjectedPerformance_({...entry,checked:false,version:2},props),/수동 이동·변경/);assert.equal(e.sheets.get('검증 실적').rows[1][0],'외부 수동 변경');
+});
+
+test('공개 초기화 한 요청에 인증 상태·검증된 공휴일·오늘 자료를 함께 반환한다',()=>{
+ const e=environment();e.login();const model=e.model();model.data.calendarNotes=[{id:'note',date:'2026-10-29',text:'비공개 직원 일정'}];model.data.schedules.push({...model.data.schedules[0],id:'old',validTo:'2025-12-31'});model.data.enrollments.push({id:'old-enrollment',scheduleId:'old',memberId:'person-1',from:'2025-01-01',to:'2025-12-31',active:true});
+ e.call('/api/team/initialize',{management:model.data,records:{}});e.logout();const response=e.call('/api/team/bootstrap',{},'GET');assert.equal(response.status,200);const data=response.body;assert.equal(data.team.service,'ch-team-api');assert.equal(data.team.authenticated,false);assert.equal(data.holidays.ok,true);assert.equal(data.scope,'today');assert.equal(data.config.schedules.length,1);assert.equal(data.config.enrollments.length,0);assert.equal(data.config.staff.length,0);assert.equal(data.config.calendarNotes,undefined);assert.equal(data.entries.length,0);assert.ok(data.timing.totalMs>=0);
+});
+test('초기 공개 스냅샷 캐시는 설정·월 자료를 다시 읽지 않으며 새 출석 후 즉시 무효화된다',()=>{
+ const e=environment();e.login();e.call('/api/team/initialize',{management:e.model().data,records:{}});e.logout();e.call('/api/team/bootstrap',{},'GET');let configReads=0,monthReads=0;const config=e.context.sharedConfig_,month=e.context.sharedMonth_;e.context.sharedConfig_=function(...args){configReads++;return config(...args)};e.context.sharedMonth_=function(...args){monthReads++;return month(...args)};
+ const warm=e.call('/api/team/bootstrap',{},'GET');assert.equal(warm.body.timing.cacheHit,true);assert.equal(configReads,0);assert.equal(monthReads,0);
+ assert.equal(e.call('/api/team/checkin',{memberId:'person-1',requestId:crypto.randomUUID()}).status,200);configReads=0;monthReads=0;
+ const fresh=e.call('/api/team/bootstrap',{},'GET');assert.equal(fresh.body.records['2026-10-29:person-1'],'출석');assert.equal(configReads,1);assert.equal(monthReads,1);assert.notEqual(fresh.body.timing.cacheHit,true);
+});
+test('관리자 초기화는 공개 캐시를 재사용하지 않고 직원 일정과 전체 자료를 유지한다',()=>{
+ const e=environment();e.login();const model=e.model();model.data.calendarNotes=[{id:'note',date:'2026-10-29',text:'직원 일정'}];e.call('/api/team/initialize',{management:model.data,records:{}});e.logout();e.call('/api/team/bootstrap',{},'GET');e.login();const data=e.call('/api/team/bootstrap',{},'GET').body;assert.equal(data.scope,'admin');assert.equal(data.team.authenticated,true);assert.equal(data.config.calendarNotes.length,1);assert.ok(data.config.staff.length>0);
+});
+test('공개 오늘 자료의 배정은 원본의 당일 대체·개별 배정·소속 이력과 동일하다',()=>{
+ const e=environment(),model=e.model(),second=model.save('members','',{name:'다른 사람',communityId:'community-1'},'2026-10-01'),schedule=model.data.schedules[0];schedule.audienceMode='individual';model.data.enrollments=[{id:'today',memberId:'person-1',scheduleId:schedule.id,from:'2026-10-01',active:true},{id:'future',memberId:second.id,scheduleId:schedule.id,from:'2027-01-01',active:true}];model.setDayOverride(schedule.id,'2026-10-29',{kind:'replace',programId:'program-1',start:'10:30',end:'11:40',location:'대체 장소',reason:'일정 변경'});
+ const month={records:{},days:{},entries:[]},holiday={ok:true,year:'2026',dates:{},fetchedAt:1},data=e.context.sharedPublicToday_(model.data,month,'2026-10-29',holiday,1),projected=new e.context.ManagementStore({...data.config,days:data.days,entries:[]});projected.holidays={};
+ const original=model.schedulesOn('2026-10-29'),actual=projected.schedulesOn('2026-10-29');assert.equal(actual.length,original.length);assert.equal(actual[0].start,'10:30');assert.equal(actual[0].location,'대체 장소');assert.deepEqual([...projected.eligibleMembers(actual[0],'2026-10-29').map(m=>m.id)],[...model.eligibleMembers(original[0],'2026-10-29').map(m=>m.id)]);
+});
+test('공휴일 외부 확인은 잠금 밖에서 수행하고 실패한 초기화는 출석 준비로 반환하지 않는다',()=>{
+ const e=environment();let locks=0;e.context.LockService.getScriptLock=()=>{locks++;throw Error('must not reach lock')};e.context.sharedHolidays_=()=>{throw Error('공휴일 서버 연결 실패')};const result=e.call('/api/team/bootstrap',{},'GET');assert.equal(result.status,503);assert.equal(locks,0);assert.equal(result.body.initialized,undefined);
+});
+test('공개 스냅샷 캐시 저장이 실패해도 검증된 원본 응답을 반환한다',()=>{
+ const e=environment();e.login();e.call('/api/team/initialize',{management:e.model().data,records:{}});e.logout();const original=e.context.CacheService.getScriptCache;e.context.CacheService.getScriptCache=()=>{const cache=original();return {...cache,put:(key,...args)=>{if(key.startsWith('kiosk:v1:'))throw Error('cache unavailable');return cache.put(key,...args)}}};assert.equal(e.call('/api/team/bootstrap',{},'GET').status,200);
+});
+
+test('첫 수요일의 공개 초기 자료는 오후를 제외하고 종일 일정을 오전으로 유지한다',()=>{
+ const e=environment(),model=e.model();model.data.schedules[0].start='10:00';model.data.schedules[0].end='15:40';model.data.schedules[0].slotId='all-day';
+ model.data.schedules.push({...model.data.schedules[0],id:'pm-only',start:'13:00',end:'15:40'});
+ const data=e.context.sharedPublicToday_(model.data,{records:{},days:{},entries:[]},'2026-11-04',{dates:{}},1),projected=new e.context.ManagementStore({...data.config,days:{},entries:[]}),actual=projected.schedulesOn('2026-11-04');assert.equal(actual.length,1);assert.equal(actual[0].end,'13:00');
+});
+test('공개 오늘 자료는 원본 소속 이력을 오늘 기준으로 반영하며 미래 이동을 앞당기지 않는다',()=>{
+ const e=environment(),model=e.model();model.data.communities.push({id:'next',name:'미래 대기실',active:true});const member=model.data.members[0];member.communityId='next';member.history=[{from:'2020-01-01',communityId:'community-1'},{from:'2027-01-01',communityId:'next'}];
+ const data=e.context.sharedPublicToday_(model.data,{records:{},days:{},entries:[]},'2026-10-29',{dates:{}},1);assert.equal(data.config.members[0].communityId,'community-1');
+});
+
+test('과거 운영 자료가 많아도 공개 첫 화면에는 오늘 프로그램과 일정만 담는다',()=>{
+ const e=environment(),model=e.model();
+ for(let i=0;i<100;i++){model.data.programs.push({id:'past-p-'+i,name:'과거 프로그램 '+i,areaId:'area-1',active:false,facilitatorIds:[]});model.data.schedules.push({id:'past-s-'+i,programId:'past-p-'+i,start:'10:00',end:'11:30',weekdays:[1,2,3,4,5],validFrom:'2020-01-01',validTo:'2025-12-31',active:true,communityId:'community-1'});model.data.enrollments.push({id:'past-e-'+i,scheduleId:'past-s-'+i,memberId:'person-1',from:'2020-01-01',to:'2025-12-31',active:false})}
+ const data=e.context.sharedPublicToday_(model.data,{records:{},days:{},entries:[]},'2026-10-29',{dates:{}},1);
+ assert.equal(data.config.programs.length,1);assert.equal(data.config.schedules.length,1);assert.equal(data.config.enrollments.length,0);assert.ok(JSON.stringify(data.config).length<JSON.stringify(model.data).length*.3);
+});
+test('초기 캐시에 잘못된 내용이 있으면 원본을 다시 읽어 화면을 준비한다',()=>{
+ const e=environment();e.login();e.call('/api/team/initialize',{management:e.model().data,records:{}});e.logout();e.call('/api/team/bootstrap',{},'GET');const original=e.context.CacheService.getScriptCache;e.context.CacheService.getScriptCache=()=>{const cache=original();return {...cache,get:key=>key.startsWith('kiosk:v1:')?'{}':cache.get(key)}};
+ const data=e.call('/api/team/bootstrap',{},'GET').body;assert.equal(data.initialized,true);assert.equal(data.config.members.length,1);assert.notEqual(data.timing.cacheHit,true);
+});

@@ -86,17 +86,31 @@ function sharedQueueReports_(month,memberId,date){
   month.reports[id]={signature,sync:'pending',error:'',entry:Object.assign({},report,{id,version:old?old.entry.version+1:1})};
  });
 }
-function sharedFlushMonth_(month,limit,deadline){
- if(!sharedReportsConfigured_()&&!Object.values(month.reports).some(function(report){return Array.isArray(report.entry.reportStaff)}))return 0;
- var count=0,props=sharedProps_();
+function sharedApplyReportSync_(month,reports){
+ var bySource=new Map(),legacy=new Map();
+ reports.forEach(function(report){
+  if(Array.isArray(report.entry.allSourceIds))report.entry.allSourceIds.forEach(function(id){bySource.set(id,report)});
+  else legacy.set(report.entry.id,report);
+ });
+ if(!bySource.size&&!legacy.size)return;
+ month.entries.forEach(function(entry){
+  var report=bySource.get(entry.id);
+  if(!report&&legacy.size)report=legacy.get((entry.reportMode==='program'?'program-':'area-')+sharedHash_(PerformanceProjection.key(entry)));
+  if(report){entry.sync=report.sync;entry.error=report.error||''}
+ });
+}
+function sharedFlushMonth_(month,limit,deadline,book){
  var reports=Object.values(month.reports).filter(function(report){return report.sync!=='synced'});
+ if(!reports.length)return 0;
+ if(!sharedReportsConfigured_()&&!Object.values(month.reports).some(function(report){return Array.isArray(report.entry.reportStaff)}))return 0;
+ var count=0,props=sharedProps_(),context=performanceWriteContext_(book||sharedBook_());
  reports.sort(function(a,b){return Number(a.sync==='error')-Number(b.sync==='error')});
  for(var report of reports){
   if(count>=limit||deadline&&Date.now()>=deadline)break;
   count++;
-  try{writeProjectedPerformance_(report.entry,props);report.sync='synced';report.error=''}catch(error){report.sync='error';report.error=error.message}
+  try{writeProjectedPerformance_(report.entry,props,context);report.sync='synced';report.error=''}catch(error){report.sync='error';report.error=error.message}
  }
- month.entries.forEach(function(entry){var report=month.reports[(entry.reportMode==='program'?'program-':'area-')+sharedHash_(PerformanceProjection.key(entry))];entry.sync=report?.sync||'pending';entry.error=report?.error||''});return count;
+ sharedApplyReportSync_(month,reports);return count;
 }
 function sharedCanDeferReports_(){
  var cache=CacheService.getScriptCache(),key='report-maintenance-installed',cached=cache.get(key);
@@ -250,12 +264,13 @@ function sharedAdvanceProgramPurge_(book,manifest,config,job){
    job.reportIds=Object.keys(month.reports).filter(function(id){var report=month.reports[id],e=report.entry;if(e.programId===job.programId&&!sources.some(function(s){return s.memberId===e.memberId&&s.date===e.date})){report.entry=Object.assign({},e,{checked:false,version:e.version+1});report.sync='pending'}return !!pairs[e.date+':'+e.memberId]});
    job.prepared=true;sharedSaveMonth_(book,manifest,key,month);sharedSavePurgeConfig_(book,manifest,config);return Object.assign({ok:true},sharedPurgeReply_(job));
   }
-  var count=0,deadline=Date.now()+3500,ledger=book.getSheetByName('__CH_PERFORMANCE_V1'),journal=ledger&&ledger.getLastRow()>1?ledger.getRange(2,1,ledger.getLastRow()-1,1).getValues().map(function(row){return row[0]}):[];
+  var context=performanceWriteContext_(book),count=0,deadline=Date.now()+3500,ledger=book.getSheetByName('__CH_PERFORMANCE_V1'),journal=ledger&&ledger.getLastRow()>1?ledger.getRange(2,1,ledger.getLastRow()-1,1).getValues().map(function(row){return row[0]}):[];
   for(var id of job.reportIds){var report=month.reports[id];if(!report||report.sync==='synced')continue;if(count>=8||Date.now()>=deadline)break;count++;
    var projectionIds=[report.entry.id].concat((report.entry.reportStaff||[]).map(function(staff){return 'staff-'+sharedHash_(JSON.stringify([report.entry.id,staff.id]))}));
    if(!report.entry.checked&&!projectionIds.some(function(id){return journal.includes(id)})){report.sync='synced';report.error='';continue}
-   try{writeProjectedPerformance_(report.entry,sharedProps_());report.sync='synced';report.error=''}catch(error){report.sync='error';report.error=error.message;job.error='시트 정리 확인 필요 · '+error.message}
+   try{writeProjectedPerformance_(report.entry,sharedProps_(),context);report.sync='synced';report.error=''}catch(error){report.sync='error';report.error=error.message;job.error='시트 정리 확인 필요 · '+error.message}
   }
+  sharedApplyReportSync_(month,job.reportIds.map(function(id){return month.reports[id]}).filter(Boolean));
   if(job.reportIds.some(function(id){return month.reports[id]&&month.reports[id].sync!=='synced'})){sharedSaveMonth_(book,manifest,key,month);sharedSavePurgeConfig_(book,manifest,config);return Object.assign({ok:true},sharedPurgeReply_(job))}
   var removedIds=sources.map(function(e){return e.id});month.entries=month.entries.filter(function(e){return e.programId!==job.programId});
   Object.keys(month.requests||{}).forEach(function(id){var signature;try{signature=JSON.parse(month.requests[id].signature)}catch(error){return}if(signature.slice(3).some(function(value){return value===job.programId||job.scheduleIds.includes(value)}))delete month.requests[id]});
@@ -270,6 +285,30 @@ function sharedAdvanceProgramPurge_(book,manifest,config,job){
  sharedSavePurgeConfig_(book,manifest,config);return Object.assign({ok:true},sharedPurgeReply_(job));
 }
 
+/* Compact, verified public snapshot. Derived from the same rules as server check-in. */
+function sharedPublicToday_(config,month,today,holidays,revision){
+ var model=sharedModel_(config,{days:{},entries:[]});model.holidays=holidays.dates;
+ var resolved=model.schedulesOn(today),ids=new Set(resolved.map(function(s){return s.id})),programIds=new Set(resolved.map(function(s){return s.program.id}));
+ var bases=(config.schedules||[]).filter(function(s){return ids.has(s.id)});bases.forEach(function(s){programIds.add(s.programId)});
+ function pick(row,keys){var out={};keys.forEach(function(key){if(row[key]!==undefined)out[key]=row[key]});return out}
+ var programs=(config.programs||[]).filter(function(p){return programIds.has(p.id)}).map(function(p){return {id:p.id,name:p.name,areaId:p.areaId,active:true,facilitatorIds:[],staff:'',enabledHistory:[{from:today,enabled:true}]}}),areaIds=new Set(programs.map(function(p){return p.areaId}));
+ var visible={version:1,timetableVersion:1,communities:config.communities||[],members:(config.members||[]).filter(function(m){return m.active!==false}).map(function(m){var group=model.memberGroupAt(m,today);return {id:m.id,name:m.name,communityId:group,active:true,history:[{from:'1900-01-01',communityId:group}],photo:m.photo||null}}),programs:programs,
+  areas:(config.areas||[]).filter(function(a){return areaIds.has(a.id)}).map(function(a){return pick(a,['id','name','communityId','active'])}),
+  schedules:bases.map(function(s){return Object.assign(pick(s,['id','programId','date','weekdays','validFrom','validTo','start','end','location','communityId','slotId','audienceMode','active']),{facilitatorIds:[],reportStaffByWeekday:{},reportStaffId:''})}),
+  enrollments:(config.enrollments||[]).filter(function(e){return ids.has(e.scheduleId)&&e.active!==false&&e.from<=today&&(!e.to||e.to>=today)}).map(function(e){return {id:e.id,scheduleId:e.scheduleId,memberId:e.memberId,from:today,to:today,active:true}}),
+  scheduleOverrides:(config.scheduleOverrides||[]).filter(function(o){return o.active!==false&&o.date===today&&ids.has(o.scheduleId)}).map(function(o){return pick(o,['id','scheduleId','date','kind','programId','start','end','location','displayName','reason','audienceMode','active'])}),
+  closures:(config.closures||[]).filter(function(c){return c.active!==false&&ManagementStore.closureContains(c,today)}),banners:(config.banners||[]).filter(function(b){return b.id==='kiosk'}),staff:[],caseAssignments:[]};
+ var records={},days={};Object.keys(month.records).forEach(function(key){if(!key.startsWith(today+':'))return;records[key]=month.records[key];if(month.days[key])days[key]=pick(month.days[key],['memberId','date','participation','participationLocked'])});
+ return {initialized:true,scope:'today',date:today,revision:revision,config:visible,records:records,days:days,programCheckins:sharedProgramCheckins_(month,today),entries:[],audit:[]};
+}
+function sharedAdminSnapshot_(config,month,today,revision){
+ var visible=JSON.parse(JSON.stringify(config));delete visible.configAudit;delete visible.purgeJobs;delete visible.purgedEntities;
+ return {initialized:true,scope:'admin',date:today,revision:revision,config:visible,records:month.records,days:month.days,programCheckins:sharedProgramCheckins_(month,today),entries:month.entries,audit:(config.configAudit||[]).concat(month.audit||[]),purgedProgramIds:Object.keys(config.purgedEntities||{}).filter(function(key){return key.indexOf('programs:')===0}).map(function(key){return key.slice(9)})};
+}
+function sharedTodayCacheKey_(today,revision,holidays){return 'kiosk:v1:'+sharedHash_(sharedProps_().getProperty('SPREADSHEET_ID'))+':'+today+':'+revision+':'+holidays.fetchedAt}
+function sharedCacheToday_(key,data){try{var text=JSON.stringify(data);if(Utilities.newBlob(text,'application/json').getBytes().length<80000)CacheService.getScriptCache().put(key,text,300)}catch(error){/* A cache miss or capacity limit never prevents a verified response. */}}
+
+function sharedTeamStatus_(manifest,admin,staffId){return sharedReply_({service:'ch-team-api',configured:true,initialized:manifest.initialized,authenticated:admin,staffId:staffId,googleConfigured:!!sharedProps_().getProperty('SPREADSHEET_ID'),staffReportTabs:true,weekdayReportTabs:true,participantReportOwners:true,memberPatch:true,caseManagerBatch:true,participationPeriods:true,programCheckin:true,programPurge:true,calendarNotes:true,calendarEntries:true,local:false,backend:'google'})}
 function sharedRpc(request,origin,channel){
  if(!sharedOriginAllowed_(origin)||!/^[-a-zA-Z0-9]{20,100}$/.test(channel||''))return sharedReply_({error:'허용되지 않은 연결입니다.'},403);
  if(!request||typeof request.path!=='string'||!['GET','POST'].includes(request.method)||JSON.stringify(request).length>1500000)return sharedReply_({error:'요청 형식 또는 크기 오류'},400);
@@ -282,8 +321,10 @@ function sharedRpc(request,origin,channel){
  if(request.method==='GET'&&path.startsWith('/api/team/photos/')){
   try{return sharedPhoto_(sharedBook_(),request,false)}catch(error){return sharedReply_({error:error.message||'사진을 불러오지 못했습니다.'},500)}
  }
- var checkin=path==='/api/team/checkin',started=Date.now(),phase=started,timing={};
- function mark(name){if(checkin){var now=Date.now();timing[name]=now-phase;phase=now}}
+ var checkin=path==='/api/team/checkin',bootstrap=path==='/api/team/bootstrap',measured=checkin||bootstrap,started=Date.now(),phase=started,timing={},startupHolidays=null;
+ if(bootstrap||path==='/api/team/state'&&!admin){try{startupHolidays=sharedHolidays_(sharedToday_().slice(0,4))}catch(error){return sharedReply_({ok:false,error:error.message},503)}}
+ function mark(name){if(measured){var now=Date.now();timing[name]=now-phase;phase=now}}
+ if(bootstrap)mark('holidayMs');
  var lock=LockService.getScriptLock();
  if(!lock.tryLock(25000)){
   if(checkin)console.log('checkin_timing '+JSON.stringify({lockMs:Date.now()-started,result:'busy'}));
@@ -291,25 +332,44 @@ function sharedRpc(request,origin,channel){
  }
  mark('lockMs');
  try{
-  var book=sharedBook_(),manifest=sharedManifest_(book),today=sharedToday_(),input=request.input||{};
+  var book=sharedBook_(),manifest=sharedManifest_(book),today=sharedToday_(),input=request.input||{};mark('manifestReadMs');
+  if(bootstrap&&!manifest.initialized)return sharedReply_({initialized:false,team:sharedTeamStatus_(manifest,admin&&!staffId,'').body,holidays:startupHolidays,date:today,timing:timing});
+  var todayCacheKey=startupHolidays?sharedTodayCacheKey_(today,manifest.revision,startupHolidays):'';
+  if(!admin&&!staffId&&(bootstrap||path==='/api/team/state')&&manifest.initialized){
+   if(!bootstrap&&Number(params.since||0)===manifest.revision)return sharedReply_({initialized:true,unchanged:true,date:today,revision:manifest.revision});
+   var cached=CacheService.getScriptCache().get(todayCacheKey);
+   if(cached){var cachedState;try{cachedState=JSON.parse(cached)}catch(error){}
+    if(cachedState&&cachedState.initialized&&cachedState.scope==='today'&&cachedState.date===today&&cachedState.revision===manifest.revision&&Array.isArray(cachedState.config?.members)&&Array.isArray(cachedState.config?.schedules)){timing.cacheHit=true;mark('snapshotMs');return sharedReply_(bootstrap?Object.assign({},cachedState,{team:sharedTeamStatus_(manifest,false,'').body,holidays:startupHolidays,timing:timing}):cachedState)}
+   }
+  }
   // Under the same lock, an unchanged snapshot needs neither config nor monthly JSON reads.
   if(path==='/api/team/state'&&manifest.initialized){
    var requestedMonth=admin?(params.month||today.slice(0,7)):today.slice(0,7);
    if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(requestedMonth))throw Error('조회 월 오류');
    if(Number(params.since||0)===manifest.revision)return sharedReply_({initialized:true,unchanged:true,revision:manifest.revision});
   }
+  if(!staffId&&path==='/api/team/status')return sharedTeamStatus_(manifest,admin,'');
+  if(!staffId&&path==='/api/integration-status')return sharedReply_({service:'ch-performance-api',configured:sharedReportsConfigured_(),authenticated:admin});
   var config=sharedConfig_(book,manifest);
   mark('configReadMs');
   var staff=staffId&&config?(config.staff||[]).find(function(person){return person.id===staffId&&person.active!==false}):null;
   if(staffId&&!staff)admin=false;
   var actor=staff?staff.name:admin?'공용 관리자':'참여자 출석';
-  if(path==='/api/team/status')return sharedReply_({service:'ch-team-api',configured:true,initialized:manifest.initialized,authenticated:admin,staffId:staff?staff.id:'',googleConfigured:!!sharedProps_().getProperty('SPREADSHEET_ID'),staffReportTabs:true,weekdayReportTabs:true,participantReportOwners:true,memberPatch:true,caseManagerBatch:true,participationPeriods:true,programCheckin:true,programPurge:true,calendarNotes:true,calendarEntries:true,local:false,backend:'google'});
+  if(path==='/api/team/status')return sharedTeamStatus_(manifest,admin,staff?staff.id:'');
   if(path==='/api/integration-status')return sharedReply_({service:'ch-performance-api',configured:sharedReportsConfigured_(),authenticated:admin});
+  if(bootstrap){
+   var month=sharedMonth_(book,manifest,today.slice(0,7));mark('monthReadMs');
+   var snapshot=admin?sharedAdminSnapshot_(config,month,today,manifest.revision):sharedPublicToday_(config,month,today,startupHolidays,manifest.revision);mark('snapshotMs');
+   if(!admin)sharedCacheToday_(todayCacheKey,snapshot);
+   return sharedReply_(Object.assign({},snapshot,{team:sharedTeamStatus_(manifest,admin,staff?staff.id:'').body,holidays:startupHolidays,timing:timing}));
+  }
   if(path.startsWith('/api/team/photos/')||path==='/api/team/photo')return sharedPhoto_(book,request,admin);
   if(path==='/api/team/state'){
    if(!manifest.initialized)return sharedReply_({initialized:false});var monthKey=admin?(params.month||today.slice(0,7)):today.slice(0,7);if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(monthKey))throw Error('조회 월 오류');
    if(Number(params.since||0)===manifest.revision)return sharedReply_({initialized:true,unchanged:true,revision:manifest.revision});
-   var month=sharedMonth_(book,manifest,monthKey),visibleConfig=JSON.parse(JSON.stringify(config));
+   var month=sharedMonth_(book,manifest,monthKey);
+   if(!admin){var snapshot=sharedPublicToday_(config,month,today,startupHolidays||sharedHolidays_(today.slice(0,4)),manifest.revision);sharedCacheToday_(todayCacheKey,snapshot);return sharedReply_(snapshot)}
+   var visibleConfig=JSON.parse(JSON.stringify(config));
    delete visibleConfig.configAudit;delete visibleConfig.purgeJobs;delete visibleConfig.purgedEntities;
    if(!admin){visibleConfig.members=visibleConfig.members.filter(function(m){return m.active!==false}).map(function(m){return {id:m.id,name:m.name,communityId:m.communityId,active:true,history:[{from:'1900-01-01',communityId:m.communityId}],photo:m.photo||null}});visibleConfig.staff=[];visibleConfig.caseAssignments=[];delete visibleConfig.calendarNotes}
    var publicRecords={},publicDays={};Object.keys(month.records).forEach(function(key){if(admin||key.startsWith(today+':')){publicRecords[key]=month.records[key];publicDays[key]=month.days[key]}});
@@ -365,7 +425,7 @@ function sharedRpc(request,origin,channel){
    sharedSaveMonth_(book,manifest,key,month);sharedCommit_(book,manifest); // Commit attendance before attempting report projection.
    mark('attendanceWriteMs');
    // The committed month already contains the report queue. The installed maintenance trigger drains it.
-   if(!(publicCheckin&&input.deferReports===true&&sharedCanDeferReports_())&&sharedFlushMonth_(month,4)){
+   if(!(publicCheckin&&input.deferReports===true&&sharedCanDeferReports_())&&sharedFlushMonth_(month,4,undefined,book)){
     sharedSaveMonth_(book,manifest,key,month);sharedCommit_(book,manifest);
    }
    mark('reportStepMs');
@@ -429,7 +489,7 @@ function sharedRpc(request,origin,channel){
    month.audit=(month.audit||[]).concat(model.data.audit.map(function(item){return Object.assign(item,{actor:actor})})).slice(-1000);
    sharedQueueReports_(month,input.memberId,d);
    sharedSaveMonth_(book,manifest,monthKey,month);sharedCommit_(book,manifest);
-   if(sharedFlushMonth_(month,4)){sharedSaveMonth_(book,manifest,monthKey,month);sharedCommit_(book,manifest)}
+   if(sharedFlushMonth_(month,4,undefined,book)){sharedSaveMonth_(book,manifest,monthKey,month);sharedCommit_(book,manifest)}
    return sharedReply_({ok:true,reportReceipt:sharedReportReceipt_(month,input.memberId,d)});
   }
   if(path==='/api/team/initialize'){
@@ -474,7 +534,7 @@ function sharedRpc(request,origin,channel){
     if(manifest.months[key].pending===false)return;
     var month=sharedMonth_(book,manifest,key),changed=false;
     if(budget>0&&Date.now()<deadline){var done=sharedReconcile_(config,month,budget);budget-=done;changed=done>0}
-    if(reportBudget>0){var flushed=sharedFlushMonth_(month,reportBudget,deadline);reportBudget-=flushed;if(flushed)changed=true}
+    if(reportBudget>0){var flushed=sharedFlushMonth_(month,reportBudget,deadline,book);reportBudget-=flushed;if(flushed)changed=true}
     remaining+=month.reconcile.length;
     remainingReports+=Object.keys(month.reports).filter(function(id){return month.reports[id].sync!=='synced'}).length;
     if(changed){sharedSaveMonth_(book,manifest,key,month);anyChanged=true}
@@ -485,9 +545,9 @@ function sharedRpc(request,origin,channel){
   return sharedReply_({error:'지원하지 않는 API 경로'},404);
  }catch(error){return sharedReply_({error:error.message||'Google 저장 오류'},error.conflict?409:500)}finally{
   lock.releaseLock();
-  if(checkin){
+  if(measured){
    timing.totalMs=Date.now()-started;
-   console.log('checkin_timing '+JSON.stringify(timing));
+   console.log((bootstrap?'bootstrap_timing ':'checkin_timing ')+JSON.stringify(timing));
   }
  }
 }

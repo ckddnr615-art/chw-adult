@@ -316,7 +316,7 @@ function bindManagement(page){
 }
 // Initial rendering is performed after timetable.js installs the program hub.
 // Only inspect the local server configuration. No write is sent by this probe.
-void checkConnection();
+// Initial integration status arrives with the shared bootstrap response.
 /* Permanent deletion controls: preview, target backup, typed confirmation and resumable steps. */
 let programPurgeBusy=false;
 async function openProgramPurge(programId){
