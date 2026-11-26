@@ -365,6 +365,7 @@ async function refreshSharedChanges(){
  if(sharedRefreshBusy)return;
  if(configPending||configSaving||team.saving){toast(team.error||'저장 중인 변경이 있습니다. 저장을 완료한 뒤 최신화해 주세요.');return}
  if(sharedRefreshBlocked()){toast('입력 중인 내용을 저장하거나 취소한 뒤 최신화해 주세요.');return}
+ if(location.hash.split('/')[0]==='#program-reports'){await queryProgramReports();return}
  sharedRefreshBusy=true;syncSharedRefreshControl();
  try{
   const response=await fetch('/api/team/status',{credentials:'same-origin'}),state=await response.json();
@@ -391,7 +392,7 @@ function sharedScreenCanRefresh(){
  return true;
 }
 async function refreshSharedInBackground(){
- if(refreshSharedInBackground.busy||!team.active||document.hidden||configPending||configSaving||location.hash==='#appearance'||sharedRefreshBlocked())return;
+ if(refreshSharedInBackground.busy||!team.active||document.hidden||configPending||configSaving||['#appearance','#program-reports'].includes(location.hash)||sharedRefreshBlocked())return;
  refreshSharedInBackground.busy=true;
  const month=location.hash==='#reports'?reportMonth:location.hash==='#attendance'?selectedDate.slice(0,7):date.slice(0,7),before=monthRevisions.get(month),hadRefreshError=!!team.refreshError;
  try{
