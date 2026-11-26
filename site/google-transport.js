@@ -2,7 +2,7 @@
 (function(){
  const config=window.GOOGLE_SHARED_CONFIG;if(!config)return;
  const originalFetch=window.fetch.bind(window),channel=crypto.randomUUID(),pending=new Map();
- let peer=null,peerOrigin='',frame,readyPromise,token='';
+ let peer=null,peerOrigin='',frame,readyPromise,token='',bootstrapResponse=null,bootstrapReceivedAt=0;
  const loadTiming={connectionMs:0,requests:[]};window.googleLoadTiming=()=>JSON.parse(JSON.stringify(loadTiming));
  const tokenKey='ch-google-session:'+config.webAppUrl,expiryKey=tokenKey+':expires';
  let expiresAt=0;
@@ -18,9 +18,12 @@
   readyPromise=new Promise((resolve,reject)=>{
    let url;try{url=new URL(config.webAppUrl);if(url.protocol!=='https:'||url.hostname!=='script.google.com'||!url.pathname.endsWith('/exec'))throw Error()}catch{reject(Error('google-config.js에 Apps Script 웹앱 /exec 주소를 입력해 주세요.'));return}
    const timeout=setTimeout(()=>{window.removeEventListener('message',onReady);reject(Error('Google 연결 시간이 초과되었습니다. 웹앱 배포 권한·SITE_ORIGINS·브라우저 쿠키 설정을 확인해 주세요.'))},config.connectionTimeoutMs||60000);
-   function onReady(event){if(event.data?.type!=='ch-google-ready'||event.data.channel!==channel||!allowedGoogleOrigin(event.origin)||!event.source)return;peer=event.source;peerOrigin=event.origin;clearTimeout(timeout);window.removeEventListener('message',onReady);loadTiming.connectionMs=Date.now()-connectionStarted;resolve()}
+   function onReady(event){if(event.data?.type!=='ch-google-ready'||event.data.channel!==channel||!allowedGoogleOrigin(event.origin)||!event.source)return;peer=event.source;peerOrigin=event.origin;clearTimeout(timeout);window.removeEventListener('message',onReady);loadTiming.connectionMs=Date.now()-connectionStarted;
+    const initial=event.data.bootstrap;
+    if(!token&&initial?.status===200&&initial.body?.team?.service==='ch-team-api'&&initial.body.team.authenticated===false){bootstrapResponse=initial;bootstrapReceivedAt=Date.now()}
+    resolve()}
    window.addEventListener('message',onReady);
-   url.search=new URLSearchParams({mode:'bridge',origin:location.origin,channel}).toString();frame=document.createElement('iframe');frame.title='Google 공동 저장 연결';frame.hidden=true;frame.src=url.href;document.body.append(frame);
+   url.search=new URLSearchParams({mode:'bridge',origin:location.origin,channel,...(!token?{bootstrap:'1'}:{})}).toString();frame=document.createElement('iframe');frame.title='Google 공동 저장 연결';frame.hidden=true;frame.src=url.href;document.body.append(frame);
   }).catch(error=>{
    // A failed handshake must not leave every later retry attached to a rejected promise.
    readyPromise=null;peer=null;peerOrigin='';frame?.remove?.();frame=null;
@@ -34,7 +37,11 @@
   if(event.data.error)item.reject(Error(event.data.error));else item.resolve(event.data.response);
  });
  async function rpc(path,method,input,session=token){
-  await connect();const id=crypto.randomUUID();return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{pending.delete(id);reject(Error('Google 저장 응답을 확인하지 못했습니다. 같은 요청으로 다시 확인해 주세요.'))},config.requestTimeoutMs||90000);pending.set(id,{resolve,reject,timer,path:path.split('?')[0],started:Date.now()});peer.postMessage({type:'ch-google-request',channel,id,request:{path,method,input,token:session}},peerOrigin)});
+  await connect();
+  if(path==='/api/team/bootstrap'&&method==='GET'&&!session&&!token&&bootstrapResponse&&Date.now()-bootstrapReceivedAt<15000){
+   const result=bootstrapResponse;bootstrapResponse=null;loadTiming.requests.push({path,durationMs:0,source:'bridge'});return result;
+  }
+  const id=crypto.randomUUID();return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{pending.delete(id);reject(Error('Google 저장 응답을 확인하지 못했습니다. 같은 요청으로 다시 확인해 주세요.'))},config.requestTimeoutMs||90000);pending.set(id,{resolve,reject,timer,path:path.split('?')[0],started:Date.now()});peer.postMessage({type:'ch-google-request',channel,id,request:{path,method,input,token:session}},peerOrigin)});
  }
  window.fetch=async function(input,options={}){
   const url=new URL(typeof input==='string'?input:input.url,location.href);if(url.origin!==location.origin||!url.pathname.startsWith('/api/'))return originalFetch(input,options);

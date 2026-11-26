@@ -8,16 +8,28 @@ function sharedBook_(){var id=sharedProps_().getProperty('SPREADSHEET_ID');if(!i
 function sharedSheet_(book,name){var sheet=book.getSheetByName(name);if(!sheet){sheet=book.insertSheet(name);if(sheet.getMaxColumns&&sheet.getMaxColumns()>5)sheet.deleteColumns(6,sheet.getMaxColumns()-5);if(sheet.deleteRows&&sheet.getMaxRows()>100)sheet.deleteRows(101,sheet.getMaxRows()-100);sheet.hideSheet()}return sheet}
 function sharedManifest_(book){var sheet=sharedSheet_(book,SHARED_META_),raw=sheet.getRange(1,1).getValue();return raw?JSON.parse(raw):{revision:0,initialized:false,config:null,months:{}}}
 function sharedCommit_(book,manifest){manifest.revision++;var text=JSON.stringify(manifest);if(text.length>48000)throw Error('연도별 자료 보관을 점검해 주세요.');sharedSheet_(book,SHARED_META_).getRange(1,1).setValue(text);SpreadsheetApp.flush()}
+// Cache immutable content, never the mutable manifest pointer. Every request still
+// verifies the committed revision under the storage lock before choosing a key.
+function sharedReadCacheKey_(descriptor){return 'read:v1:'+sharedHash_(sharedProps_().getProperty('SPREADSHEET_ID')+':'+descriptor.sheet+':'+descriptor.hash)}
+function sharedCacheRead_(descriptor,encoded){try{if(encoded.length<80000)CacheService.getScriptCache().put(sharedReadCacheKey_(descriptor),encoded,300)}catch(error){/* Cache is optional. */}}
 function sharedRead_(book,descriptor,fallback){
- if(!descriptor)return fallback;var sheet=book.getSheetByName(descriptor.sheet);if(!sheet)throw Error('공동 저장 자료가 없습니다. 백업을 확인해 주세요.');
- var encoded=sheet.getRange(1,1,descriptor.parts,1).getValues().map(function(r){return r[0]}).join('');if(sharedHash_(encoded)!==descriptor.hash)throw Error('공동 저장 자료 검증 오류. 잠시 후 다시 확인해 주세요.');
+ if(!descriptor)return fallback;
+ var encoded='';try{encoded=CacheService.getScriptCache().get(sharedReadCacheKey_(descriptor))||''}catch(error){}
+ if(encoded&&sharedHash_(encoded)!==descriptor.hash)encoded='';
+ if(!encoded){
+  var sheet=book.getSheetByName(descriptor.sheet);if(!sheet)throw Error('공동 저장 자료가 없습니다. 백업을 확인해 주세요.');
+  encoded=sheet.getRange(1,1,descriptor.parts,1).getValues().map(function(r){return r[0]}).join('');if(sharedHash_(encoded)!==descriptor.hash)throw Error('공동 저장 자료 검증 오류. 잠시 후 다시 확인해 주세요.');
+  sharedCacheRead_(descriptor,encoded);
+ }
+ // Parse a new object on each read so a failed write cannot mutate cached data.
  return JSON.parse(Utilities.ungzip(Utilities.newBlob(Utilities.base64Decode(encoded),'application/x-gzip','shared.json.gz')).getDataAsString('UTF-8'));
 }
 function sharedWrite_(book,key,old,value){
  var bank=old&&old.bank==='A'?'B':'A',sheet=sharedSheet_(book,'__CH_APP_'+key+'_'+bank),encoded=Utilities.base64Encode(Utilities.gzip(Utilities.newBlob(JSON.stringify(value),'application/json')).getBytes()),parts=[];
  for(var i=0;i<encoded.length;i+=40000)parts.push([encoded.slice(i,i+40000)]);
  if(sheet.getMaxRows()<parts.length)sheet.insertRowsAfter(sheet.getMaxRows(),parts.length-sheet.getMaxRows());var priorRows=sheet.getLastRow();sheet.getRange(1,1,parts.length,1).setValues(parts);if(priorRows>parts.length)sheet.getRange(parts.length+1,1,priorRows-parts.length,1).clearContent();SpreadsheetApp.flush();
- return {sheet:sheet.getName(),bank,parts:parts.length,hash:sharedHash_(encoded)};
+ var descriptor={sheet:sheet.getName(),bank,parts:parts.length,hash:sharedHash_(encoded)};
+ sharedCacheRead_(descriptor,encoded);return descriptor;
 }
 function sharedReportsConfigured_(){try{return Object.keys(JSON.parse(sharedProps_().getProperty('SHEET_TAB_MAP')||'{}')).length>0}catch(error){return false}}
 function sharedConfig_(book,manifest){return sharedRead_(book,manifest.config,null)}
@@ -64,6 +76,12 @@ function doGet(e){
   if(e.parameter.mode!=='bridge'||!sharedOriginAllowed_(origin)||!/^[-a-zA-Z0-9]{20,100}$/.test(channel))return HtmlService.createHtmlOutput('연결할 사이트 주소와 SITE_ORIGINS 설정을 확인해 주세요.');
   stage='Bridge.html 파일 불러오기';
   var page=HtmlService.createTemplateFromFile('Bridge');page.parentOriginJson=JSON.stringify(origin).replace(/</g,'\\u003c');page.channelJson=JSON.stringify(channel);
+  // Public data only: never infer staff authentication from Google cookies.
+  var preload=null;
+  if(e.parameter.bootstrap==='1'){
+   try{var initial=sharedRpc({path:'/api/team/bootstrap',method:'GET',input:{},token:''},origin,channel);if(initial.status===200)preload=initial}catch(ignored){}
+  }
+  page.bootstrapJson=JSON.stringify(preload).replace(/</g,'\\u003c').replace(/\u2028/g,'\\u2028').replace(/\u2029/g,'\\u2029');
   stage='Bridge.html 코드 실행';
   return page.evaluate().setTitle('충현 Google 공동 저장 연결').setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
  }catch(error){

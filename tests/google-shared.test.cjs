@@ -1,4 +1,32 @@
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),crypto=require('node:crypto'),zlib=require('node:zlib');
+
+test('버전별 압축 읽기 캐시는 시트 재조회를 줄이고 읽은 객체의 변경을 격리한다',()=>{
+ const e=environment(),book=e.context.SpreadsheetApp.openById('test-book');
+ const first=e.context.sharedWrite_(book,'CACHE',null,{name:'이전'});
+ const sheet=e.sheets.get(first.sheet),range=sheet.getRange.bind(sheet);let reads=0;
+ sheet.getRange=(...args)=>{reads++;return range(...args)};
+ const changed=e.context.sharedRead_(book,first,null);changed.name='저장되지 않은 수정';
+ assert.equal(e.context.sharedRead_(book,first,null).name,'이전');assert.equal(reads,0);
+ const second=e.context.sharedWrite_(book,'CACHE',first,{name:'최신'});
+ assert.equal(e.context.sharedRead_(book,second,null).name,'최신');assert.equal(e.context.sharedRead_(book,first,null).name,'이전');
+});
+
+test('읽기 캐시 손상·장애는 검증된 시트 원본으로 복구한다',()=>{
+ const e=environment(),book=e.context.SpreadsheetApp.openById('test-book'),descriptor=e.context.sharedWrite_(book,'CACHE',null,{value:7});
+ e.context.CacheService.getScriptCache=()=>({get:()=> 'corrupt',put(){throw Error('quota')}});
+ assert.equal(e.context.sharedRead_(book,descriptor,null).value,7);
+ e.context.CacheService.getScriptCache=()=>({get(){throw Error('unavailable')},put(){throw Error('unavailable')}});
+ assert.equal(e.context.sharedRead_(book,descriptor,null).value,7);
+});
+
+test('연결 페이지 선조회는 공개 권한으로만 전달하고 HTML 삽입 문자열을 이스케이프한다',()=>{
+ const e=environment();e.login();const model=e.model();model.data.programs[0].name='</script><script>unsafe</script>';e.call('/api/team/initialize',{management:model.data,records:{}});
+ let template;
+ e.context.HtmlService={XFrameOptionsMode:{ALLOWALL:1},createHtmlOutput:text=>({text}),createTemplateFromFile(){template={evaluate:()=>({setTitle(){return this},setXFrameOptionsMode(){return this}})};return template}};
+ e.context.doGet({parameter:{mode:'bridge',origin:'https://test.pages.dev',channel:crypto.randomUUID(),bootstrap:'1'}});
+ const data=JSON.parse(template.bootstrapJson);assert.equal(data.body.team.authenticated,false);assert.equal(data.body.scope,'today');assert.equal(data.body.config.staff.length,0);assert.doesNotMatch(template.bootstrapJson,/<script|<\/script/);
+ e.context.doGet({parameter:{mode:'bridge',origin:'https://test.pages.dev',channel:crypto.randomUUID()}});assert.equal(template.bootstrapJson,'null');
+});
 test('Apps Script 서버 파일은 논리 대입 문법과 최신 내장 메서드에 의존하지 않는다',()=>{
  const dir=require('node:path').join(__dirname,'../apps-script');
  for(const name of fs.readdirSync(dir).filter(n=>n.endsWith('.gs'))){const source=fs.readFileSync(require('node:path').join(dir,name),'utf8');assert.doesNotMatch(source,/\|\|=|&&=|\?\?=|Object\.hasOwn\(|\.at\(/,name);new vm.Script(source,{filename:name})}

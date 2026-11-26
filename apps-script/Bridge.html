@@ -7,6 +7,7 @@
   const id=event.data.id,request=event.data.request;
   google.script.run.withSuccessHandler(function(response){window.top.postMessage({type:'ch-google-response',channel,id,response},allowedOrigin)}).withFailureHandler(function(){window.top.postMessage({type:'ch-google-response',channel,id,error:'Google 저장 서버 응답 오류. Apps Script 실행 기록을 확인해 주세요.'},allowedOrigin)}).sharedRpc(request,allowedOrigin,channel);
  });
- window.top.postMessage({type:'ch-google-ready',channel},allowedOrigin);
+ const bootstrap=<?!= bootstrapJson ?>;
+ window.top.postMessage({type:'ch-google-ready',channel,bootstrap},allowedOrigin);
 })();
 </script></body></html>

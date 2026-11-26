@@ -51,7 +51,9 @@ function applyTeamSnapshot(month,data){
   }
   if(data.programCheckins){kioskProgramCheckins=data.programCheckins;kioskProgramSnapshotRevision=data.revision}
   if(!data.unchanged){applyingTeam=true;try{if(data.config&&!configPending&&!configSaving){for(const type of CONFIG_TYPES)management.data[type]=data.config[type]||[];management.data.timetableVersion=1;configBaseline=currentConfig();management.upgradeTimetable()}Object.assign(records,data.records);Object.assign(management.data.days,data.days);for(const entry of data.entries||[]){const index=management.data.entries.findIndex(e=>e.id===entry.id);if(index<0)management.data.entries.push(entry);else management.data.entries[index]=entry}if(adminSession||team.authenticated)management.data.audit=(data.audit||[]).slice().sort((a,b)=>a.time.localeCompare(b.time));originalPersist();refreshCollections();lastScheduleJSON=JSON.stringify([management.data.schedules,management.data.scheduleOverrides,management.data.closures,management.data.programs.map(p=>[p.id,p.enabledHistory||[]])])}finally{applyingTeam=false}}
-  if(!configPending&&!configSaving)monthRevisions.set(month,data.revision);team.active=true;team.initialized=true;team.dataDate=data.date||date;team.lastCheckedAt=Date.now();return true;
+  if(!configPending&&!configSaving)monthRevisions.set(month,data.revision);team.active=true;team.initialized=true;team.dataDate=data.date||date;team.lastCheckedAt=Date.now();
+  if(!data.unchanged&&data.scope==='today'&&typeof window!=='undefined')window.KioskStartupPreview?.save(data);
+  return true;
 }
 function configChanges(snapshot){const changes=[];for(const type of CONFIG_TYPES){const before=new Map((configBaseline?.[type]||[]).map(x=>[x.id,x]));for(const after of snapshot[type])if(JSON.stringify(before.get(after.id)||null)!==JSON.stringify(after))changes.push({type,id:after.id,before:before.get(after.id)||null,after})}return changes}
 function memberEditFields(member){
@@ -416,7 +418,12 @@ async function bootTeam(){
  }catch(error){team.configured=true;team.error=error.message||'Google 공동 저장 연결 설정을 확인해 주세요.';adminSession=false}
  finally{
   team.loading=false;team.startupMs=Date.now()-started;render();
-  const main=$('#main');if(main){main.dataset.startupMode=team.startupMode||'error';main.dataset.startupMs=String(team.startupMs);main.dataset.startupServerMs=String(team.startupServerTiming?.totalMs||0)}
+  const main=$('#main');if(main){
+   const transport=typeof window!=='undefined'?window.googleLoadTiming?.():null,request=transport?.requests?.filter(r=>r.path==='/api/team/bootstrap').slice(-1)[0];
+   main.dataset.startupMode=team.startupMode||'error';main.dataset.startupMs=String(team.startupMs);main.dataset.startupServerMs=String(team.startupServerTiming?.totalMs||0);
+   main.dataset.startupConnectionMs=String(transport?.connectionMs||0);main.dataset.startupRequestMs=String(request?.durationMs||0);
+   main.dataset.startupSource=request?.source||'rpc';
+  }
  }
 }
 const teamBoot=bootTeam();
