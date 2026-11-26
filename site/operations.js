@@ -36,6 +36,10 @@ async function readTeamMonth(month,full){
   await ensureHolidayYear(month.slice(0,4)).catch(()=>{});
   const since=full?0:monthRevisions.get(month)||0,response=await fetch(`/api/team/state?month=${month}&since=${since}`,{credentials:'same-origin'});if(!response.ok)throw Error('공유 자료를 읽지 못했습니다.');const data=await response.json();if(!data.initialized)return false;
   if(data.revision<Math.max(latestAttendanceRevision,...monthRevisions.values()))return true;
+  if(data.purgedProgramIds?.length){
+   management.data.entries=management.data.entries.filter(entry=>!data.purgedProgramIds.includes(entry.programId));
+   if(typeof programReportState!=='undefined'&&programReportState.result&&(programReportState.result.kind==='all'&&programReportState.result.rows.some(row=>data.purgedProgramIds.includes(row.id))||data.purgedProgramIds.includes(programReportState.result.programId)))programReportState.result=null;
+  }
   if(data.programCheckins){kioskProgramCheckins=data.programCheckins;kioskProgramSnapshotRevision=data.revision}
   if(!data.unchanged){applyingTeam=true;try{if(data.config&&!configPending&&!configSaving){for(const type of CONFIG_TYPES)management.data[type]=data.config[type]||[];management.data.timetableVersion=1;configBaseline=currentConfig();management.upgradeTimetable()}Object.assign(records,data.records);Object.assign(management.data.days,data.days);for(const entry of data.entries||[]){const index=management.data.entries.findIndex(e=>e.id===entry.id);if(index<0)management.data.entries.push(entry);else management.data.entries[index]=entry}if(adminSession||team.authenticated)management.data.audit=(data.audit||[]).slice().sort((a,b)=>a.time.localeCompare(b.time));originalPersist();refreshCollections();lastScheduleJSON=JSON.stringify([management.data.schedules,management.data.scheduleOverrides,management.data.closures,management.data.programs.map(p=>[p.id,p.enabledHistory||[]])])}finally{applyingTeam=false}}
   if(!configPending&&!configSaving)monthRevisions.set(month,data.revision);team.active=true;team.initialized=true;team.lastCheckedAt=Date.now();return true;

@@ -604,3 +604,74 @@ test('70명 출석과 10명 직원의 일정 저장이 교차해도 기록과 �
  assert.equal(Object.values(state.records).filter(s=>s==='출석').length,70);assert.equal(state.entries.filter(e=>e.checked).length,70);assert.equal(state.config.staff.length,10);assert.equal(state.config.calendarNotes.length,10);
  const maintenance=e.call('/api/team/maintenance');assert.equal(maintenance.status,200);assert.equal(maintenance.body.remaining,0);assert.equal(maintenance.body.remainingReports,58);
 });
+
+test('실적 반영이 끝난 과거 월은 예약 작업이 다시 읽지 않고 정정 시 대기 월로 돌아온다',()=>{
+ const e=environment();e.login();const model=e.model();e.call('/api/team/initialize',{management:model.data,records:{}});e.call('/api/team/checkin',{memberId:'person-1',requestId:crypto.randomUUID()});
+ e.call('/api/team/maintenance');let reads=0;const original=e.context.sharedMonth_;e.context.sharedMonth_=function(...args){reads++;return original(...args)};
+ assert.equal(e.call('/api/team/maintenance').status,200);assert.equal(reads,0);
+ const book=e.context.SpreadsheetApp.openById('test-book'),manifest=e.context.sharedManifest_(book),month=original(book,manifest,'2026-10');
+ month.reconcile=['2026-10-29:person-1'];e.context.sharedSaveMonth_(book,manifest,'2026-10',month);e.context.sharedCommit_(book,manifest);
+ assert.equal(e.context.sharedManifest_(book).months['2026-10'].pending,true);
+ e.call('/api/team/maintenance');assert.ok(reads>0);
+});
+test('이전 버전의 대기 표시 없는 월도 한 번 확인 후 다음 예약 작업에서는 건너뛴다',()=>{
+ const e=environment();e.login();e.call('/api/team/initialize',{management:e.model().data,records:{}});
+ const book=e.context.SpreadsheetApp.openById('test-book'),manifest=e.context.sharedManifest_(book);e.context.sharedSaveMonth_(book,manifest,'2025-01',{records:{},days:{},entries:[],requests:{},reports:{},reconcile:[],audit:[]});delete manifest.months['2025-01'].pending;e.context.sharedCommit_(book,manifest);
+ let reads=0;const original=e.context.sharedMonth_;e.context.sharedMonth_=function(...args){reads++;return original(...args)};
+ e.call('/api/team/maintenance');assert.equal(reads,1);reads=0;e.call('/api/team/maintenance');assert.equal(reads,0);
+});
+
+function purgeFixture(){
+ const e=environment();e.login();const model=e.model();e.call('/api/team/initialize',{management:model.data,records:{}});e.call('/api/team/checkin',{memberId:'person-1',requestId:crypto.randomUUID()});
+ const state=e.call('/api/team/state',{},'GET').body,before=state.config.programs[0];e.call('/api/team/config',{changes:[{type:'programs',id:before.id,before,after:{...before,active:false}}]});return e;
+}
+function previewPurge(e){const plan=e.call('/api/team/program-purge',{action:'preview',programId:'program-1'});assert.equal(plan.status,200);for(const month of plan.body.months)assert.equal(e.call('/api/team/program-purge',{action:'backup',programId:'program-1',ticket:plan.body.ticket,month}).status,200);return plan.body}
+function startPurge(e,plan){return e.call('/api/team/program-purge',{action:'start',programId:'program-1',ticket:plan.ticket,confirmName:plan.program.name,backupAcknowledged:true})}
+function finishPurge(e){let result;for(let i=0;i<20;i++){result=e.call('/api/team/program-purge',{action:'step',programId:'program-1'});assert.equal(result.status,200);if(result.body.done)return result}throw Error('purge did not finish: '+JSON.stringify(result))}
+test('완전 삭제는 관리자·종료 상태·백업·프로그램명·미리보기 최신 여부를 확인한다',()=>{
+ const unauth=environment();assert.equal(unauth.call('/api/team/program-purge',{action:'preview',programId:'program-1'}).status,401);
+ const e=purgeFixture(),plan=e.call('/api/team/program-purge',{action:'preview',programId:'program-1'}).body;assert.equal(startPurge(e,plan).status,400);
+ const p=previewPurge(e);assert.equal(e.call('/api/team/program-purge',{action:'start',programId:'program-1',ticket:p.ticket,confirmName:'다른 이름',backupAcknowledged:true}).status,400);
+ e.call('/api/team/config',{changes:[{type:'calendarNotes',id:'new-note',before:null,after:{id:'new-note',date:'2026-10-29',text:'다른 수정',active:true}}]});assert.equal(startPurge(e,p).status,409);
+});
+test('완전 삭제는 센터 일출결과 이용인·수동 시트 칸을 보존하고 프로그램 연결을 실제 제거한다',()=>{
+ const e=purgeFixture(),sheet=e.sheets.get('검증 실적');sheet.rows[1][1]='기관 수동 기록';const plan=previewPurge(e);assert.equal(startPurge(e,plan).status,200);finishPurge(e);
+ const state=e.call('/api/team/state',{},'GET').body;assert.equal(state.config.programs.length,0);assert.equal(state.config.schedules.length,0);assert.equal(state.entries.length,0);assert.equal(state.config.members.length,1);assert.equal(state.records['2026-10-29:person-1'],'출석');assert.deepEqual(state.purgedProgramIds,['program-1']);assert.equal(sheet.rows[1][0],'');assert.equal(sheet.rows[1][1],'기관 수동 기록');
+ assert.equal(e.call('/api/team/config',{changes:[{type:'programs',id:'program-1',before:null,after:plan.program}]}).status,409);
+});
+test('삭제 도중 저장 실패하면 진행 원본을 유지하며 같은 작업을 재개한다',()=>{
+ const e=purgeFixture(),plan=previewPurge(e);startPurge(e,plan);e.fail();assert.equal(e.call('/api/team/program-purge',{action:'step',programId:'program-1'}).status,500);
+ const state=e.call('/api/team/state',{},'GET').body;assert.equal(state.entries.length,1);assert.equal(state.entries[0].checked,true);finishPurge(e);assert.equal(e.call('/api/team/state',{},'GET').body.entries.length,0);
+});
+test('시트 충돌이 있으면 원본 실적 제거를 보류하고 오류를 고친 뒤 다시 처리한다',()=>{
+ const e=purgeFixture(),plan=previewPurge(e);startPurge(e,plan);e.call('/api/team/program-purge',{action:'step',programId:'program-1'});const sheet=e.sheets.get('검증 실적'),name=sheet.rows[1][0];sheet.rows[1][0]='시트 수동 변경';
+ const blocked=e.call('/api/team/program-purge',{action:'step',programId:'program-1'});assert.match(blocked.body.error,/시트/);assert.equal(e.call('/api/team/state',{},'GET').body.entries.length,1);sheet.rows[1][0]=name;finishPurge(e);
+});
+test('삭제 진행 중 다른 직원의 복구·일정 추가·프로그램 정정을 막는다',()=>{
+ const e=purgeFixture(),plan=previewPurge(e);startPurge(e,plan);
+ assert.equal(e.call('/api/team/config',{changes:[{type:'programs',id:'program-1',before:plan.program,after:{...plan.program,active:true}}]}).status,409);
+ assert.equal(e.call('/api/team/config',{changes:[{type:'schedules',id:'late',before:null,after:{id:'late',programId:'program-1',active:true}}]}).status,409);
+ const state=e.call('/api/team/state',{},'GET').body;assert.equal(e.call('/api/team/program-attendance',{date:'2026-10-29',memberId:'person-1',scheduleId:'schedule-1',entryId:state.entries[0].id,checked:true,expectedVersion:state.entries[0].version}).status,409);
+});
+
+test('같은 영역의 다른 프로그램 실적은 완전 삭제로 지워지지 않는다',()=>{
+ const e=environment();e.login();const model=e.model(),p=model.save('programs','',{name:'보존 프로그램',areaId:'area-1',facilitatorIds:model.data.programs[0].facilitatorIds},'2026-10-29');model.save('schedules','',{programId:p.id,communityId:'community-1',weekdays:[1,2,3,4,5],start:'13:00',end:'14:30',location:'다른 방',audienceMode:'community'},'2026-10-29');e.call('/api/team/initialize',{management:model.data,records:{}});e.call('/api/team/checkin',{memberId:'person-1',requestId:crypto.randomUUID()});
+ let state=e.call('/api/team/state',{},'GET').body;const before=state.config.programs.find(p=>p.id==='program-1');e.call('/api/team/config',{changes:[{type:'programs',id:'program-1',before,after:{...before,active:false}}]});const plan=previewPurge(e);startPurge(e,plan);finishPurge(e);state=e.call('/api/team/state',{},'GET').body;
+ assert.equal(state.config.programs.length,1);assert.equal(state.config.programs[0].id,p.id);assert.equal(state.entries.length,1);assert.equal(state.entries[0].checked,true);assert.equal(e.sheets.get('검증 실적').rows[1][0],'검증 이용인');
+});
+test('삭제 월의 이전 저장 뱅크를 정리한 뒤 완료하며 예약 작업으로도 마무리된다',()=>{
+ const e=purgeFixture(),plan=previewPurge(e);startPurge(e,plan);
+ for(let i=0;i<20;i++){e.call('/api/team/maintenance');if(!e.call('/api/team/program-purge',{action:'status'}).body.jobs.length)break}
+ assert.equal(e.call('/api/team/program-purge',{action:'status'}).body.jobs.length,0);
+ const book=e.context.SpreadsheetApp.openById('test-book'),manifest=e.context.sharedManifest_(book),current=manifest.months['2026-10'];
+ assert.equal(e.context.sharedMonth_(book,manifest,'2026-10').entries.length,0);
+ const oldName=current.sheet.endsWith('_A')?current.sheet.slice(0,-1)+'B':current.sheet.slice(0,-1)+'A',old=e.sheets.get(oldName);
+ assert.ok(old.rows.every(row=>!row[0]));
+});
+
+test('한 번도 시트에 전송되지 않은 담당 미지정 실적도 안전하게 완전 삭제한다',()=>{
+ const e=environment();e.login();const model=e.model();model.data.programs[0].active=false;e.call('/api/team/initialize',{management:model.data,records:{}});
+ const book=e.context.SpreadsheetApp.openById('test-book'),manifest=e.context.sharedManifest_(book),entry={id:'never-sent',programId:'program-1',scheduleId:'schedule-1',memberId:'person-1',name:'검증 이용인',date:'2026-10-29',start:'10:00',end:'11:30',area:'신체적 건강',program:'첫 활동',communityId:'community-1',community:'검증 소속',staff:'',reportMode:'program',reportStaff:[],checked:true,version:1};
+ const month={records:{'2026-10-29:person-1':'출석'},days:{},entries:[entry],requests:{},reports:{},reconcile:[],audit:[]};e.context.sharedQueueReports_(month,'person-1','2026-10-29');Object.values(month.reports).forEach(r=>{r.sync='error';r.error='실적 담당 미지정'});e.context.sharedSaveMonth_(book,manifest,'2026-10',month);e.context.sharedCommit_(book,manifest);
+ const plan=previewPurge(e);startPurge(e,plan);finishPurge(e);assert.equal(e.call('/api/team/state',{},'GET').body.entries.length,0);
+});

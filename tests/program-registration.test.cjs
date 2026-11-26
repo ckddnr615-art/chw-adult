@@ -72,7 +72,7 @@ test('프로그램 목록은 일정마다 삭제 버튼을 만들고 하나를 �
  const second=f.store.save('schedules','',{...f.schedule,programId:r.program.id,weekdays:[2]},'2026-10-29');
  const admin=fs.readFileSync(require.resolve('../site/admin.js'),'utf8');
  const catalog=vm.runInNewContext(admin.slice(admin.indexOf('function integratedProgramCatalog('),admin.indexOf('function programCatalogPage('))+';integratedProgramCatalog',{
-  management:f.store,showArchived:false,programAreaFilter:'',programStaffFilter:'',programStatusFilter:'',date:'2026-10-29',heading:()=>'',esc:String,opts:()=>'',programStaffQuickEditor:()=>'<div>요일별 담당자</div>'
+  management:f.store,showArchived:false,programCatalogScope:'current',programCatalogSearch:'',programCatalogPageIndex:0,programAreaFilter:'',programStaffFilter:'',programStatusFilter:'',date:'2026-10-29',heading:()=>'',esc:String,opts:()=>'',programStaffQuickEditor:()=>'<div>요일별 담당자</div>'
  });
  const html=catalog();assert.ok(html.includes('data-delete="schedules:'+r.schedule.id+'"'));assert.ok(html.includes('data-delete="schedules:'+second.id+'"'));assert.match(html,/이 일정 삭제/);assert.match(html,/프로그램 전체 관리/);
  f.store.remove('schedules',r.schedule.id);assert.equal(f.store.find('programs',r.program.id).active,true);assert.equal(f.store.find('schedules',second.id).active,true);
@@ -149,4 +149,14 @@ test('요일별로 나눈 다른 요일 이력은 시작일 수정의 충돌로 
  const f=fixture(),created=context.saveProgramWithSchedule(f.store,f.program,{...f.schedule,weekdays:[4],validFrom:'2027-01-14',validTo:'2027-12-23'},'2026-11-23').schedule;
  created.seriesId='split-weekdays';f.store.data.schedules.push({...JSON.parse(JSON.stringify(created)),id:'older-wednesday',weekdays:[3],validFrom:'2027-01-01',validTo:'2027-01-13'});
  assert.equal(f.store.changeScheduleStart(created.id,'2026-11-23','2026-11-23').validFrom,'2026-11-23');
+});
+
+test('프로그램 목록은 종료·보관을 분리하고 이름 검색 및 30개 단위 표시를 유지한다',()=>{
+ const admin=fs.readFileSync(require.resolve('../site/admin.js'),'utf8'),f=fixture();
+ f.store.data.programs=Array.from({length:65},(_,i)=>({id:'p'+i,name:'활동 '+String(i).padStart(2,'0'),areaId:'area-1',active:i<60,facilitatorIds:[]}));f.store.data.schedules=[];
+ const ctx=vm.createContext({management:f.store,programCatalogScope:'current',programCatalogSearch:'',programCatalogPageIndex:0,programAreaFilter:'',programStaffFilter:'',programStatusFilter:'',date:'2026-11-26',heading:()=>'',esc:String,opts:()=>'',programStaffQuickEditor:()=>''});
+ vm.runInContext(admin.slice(admin.indexOf('function integratedProgramCatalog('),admin.indexOf('function programCatalogPage(')),ctx);
+ let html=ctx.integratedProgramCatalog();assert.match(html,/전체 60개 프로그램/);assert.match(html,/<strong>활동 00<\/strong>/);assert.doesNotMatch(html,/<strong>활동 59<\/strong>/);
+ ctx.programCatalogScope='archived';html=ctx.integratedProgramCatalog();assert.match(html,/전체 5개 프로그램/);assert.doesNotMatch(html,/<strong>활동 00<\/strong>/);
+ ctx.programCatalogSearch='64';html=ctx.integratedProgramCatalog();assert.match(html,/전체 1개 프로그램/);assert.match(html,/<strong>활동 64<\/strong>/);
 });

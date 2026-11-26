@@ -16,13 +16,14 @@ function sharedRead_(book,descriptor,fallback){
 function sharedWrite_(book,key,old,value){
  var bank=old&&old.bank==='A'?'B':'A',sheet=sharedSheet_(book,'__CH_APP_'+key+'_'+bank),encoded=Utilities.base64Encode(Utilities.gzip(Utilities.newBlob(JSON.stringify(value),'application/json')).getBytes()),parts=[];
  for(var i=0;i<encoded.length;i+=40000)parts.push([encoded.slice(i,i+40000)]);
- if(sheet.getMaxRows()<parts.length)sheet.insertRowsAfter(sheet.getMaxRows(),parts.length-sheet.getMaxRows());sheet.getRange(1,1,parts.length,1).setValues(parts);SpreadsheetApp.flush();
+ if(sheet.getMaxRows()<parts.length)sheet.insertRowsAfter(sheet.getMaxRows(),parts.length-sheet.getMaxRows());var priorRows=sheet.getLastRow();sheet.getRange(1,1,parts.length,1).setValues(parts);if(priorRows>parts.length)sheet.getRange(parts.length+1,1,priorRows-parts.length,1).clearContent();SpreadsheetApp.flush();
  return {sheet:sheet.getName(),bank,parts:parts.length,hash:sharedHash_(encoded)};
 }
 function sharedReportsConfigured_(){try{return Object.keys(JSON.parse(sharedProps_().getProperty('SHEET_TAB_MAP')||'{}')).length>0}catch(error){return false}}
 function sharedConfig_(book,manifest){return sharedRead_(book,manifest.config,null)}
 function sharedMonth_(book,manifest,month){return sharedRead_(book,manifest.months[month],{records:{},days:{},entries:[],requests:{},reports:{},reconcile:[],audit:[]})}
-function sharedSaveMonth_(book,manifest,month,value){manifest.months[month]=sharedWrite_(book,'M_'+month.replace('-','_'),manifest.months[month],value)}
+function sharedMonthPending_(month){return !!((month.reconcile||[]).length||Object.keys(month.reports||{}).some(function(id){return month.reports[id].sync!=='synced'}))}
+function sharedSaveMonth_(book,manifest,month,value){var descriptor=sharedWrite_(book,'M_'+month.replace('-','_'),manifest.months[month],value);descriptor.pending=sharedMonthPending_(value);manifest.months[month]=descriptor}
 function sharedModel_(config,month){return new ManagementStore(Object.assign({},config,{days:month.days,entries:month.entries,audit:[]}))}
 function sharedConfigOnly_(model){var data={version:1,timetableVersion:1};SHARED_TYPES_.forEach(function(k){data[k]=model.data[k]||[]});return data}
 function sharedMemberFields_(model,member,today){
@@ -191,6 +192,84 @@ function sharedPhoto_(book,request,admin){
  var fileId=sharedCreatePhotoFile_(folderId,bytes,parts[1],input.id+'-'+version);table.getRange(index>=0?index+1:rows.length+1,1,1,5).setValues([[input.id,version,fileId,parts[1],bytes.length]]);
  return sharedReply_({ok:true,id:input.id,bytes:bytes.length,url:'/api/team/photos/'+input.id+'/'+version});
 }
+/* Permanent programme removal is a resumable administrative job, never a public action. */
+function sharedPurgeJobs_(config){return config.purgeJobs||(config.purgeJobs=[])}
+function sharedPurgeReply_(job){return {programId:job.programId,name:job.name,index:job.index,total:job.months.length,error:job.error||'',phase:job.phase||(job.prepared?'sheet':'month'),done:false}}
+function sharedSavePurgeConfig_(book,manifest,config){manifest.config=sharedWrite_(book,'CONFIG',manifest.config,config);sharedCommit_(book,manifest)}
+function sharedPurgeBlocked_(config,type,item){
+ if((config.purgedEntities||{})[type+':'+item.id]||(config.purgedEntities||{})['programs:'+item.programId]||(config.purgedEntities||{})['schedules:'+item.scheduleId])return true;
+ return (config.purgeJobs||[]).some(function(job){return item.programId===job.programId||type==='programs'&&item.id===job.programId||job.scheduleIds.includes(type==='schedules'?item.id:item.scheduleId)});
+}
+function sharedPurgeProgram_(book,manifest,config,input,token,today,actor){
+ var cache=CacheService.getScriptCache(),action=input.action,program=(config.programs||[]).find(function(p){return p.id===input.programId}),jobs=sharedPurgeJobs_(config);
+ if(action==='status')return sharedReply_({ok:true,jobs:jobs.map(sharedPurgeReply_)});
+ if(action==='step'){
+  var job=jobs.find(function(j){return j.programId===input.programId});
+  if(!job)return sharedReply_({ok:true,done:!!(config.purgedEntities||{})['programs:'+input.programId]});
+  return sharedReply_(sharedAdvanceProgramPurge_(book,manifest,config,job));
+ }
+ if(!program)return sharedReply_({error:'프로그램이 없거나 이미 완전 삭제되었습니다.'},404);
+ if(!new ManagementStore(Object.assign({},config,{days:{},entries:[],audit:[]})).programArchived(program.id,today))return sharedReply_({error:'종료·보관 프로그램만 완전 삭제할 수 있습니다. 먼저 운영 종료를 확인해 주세요.'},409);
+ if(jobs.some(function(j){return j.programId===program.id}))return sharedReply_({error:'이미 완전 삭제 중입니다. 진행 확인에서 이어서 처리해 주세요.'},409);
+ if(action==='preview'){
+  var schedules=(config.schedules||[]).filter(function(s){return s.programId===program.id}),ids=schedules.map(function(s){return s.id}),months=Object.keys(manifest.months).sort();
+  var ticket=Utilities.getUuid(),plan={programId:program.id,name:program.name,revision:manifest.revision,owner:sharedHash_(token),months:months,backed:[],affected:[],entries:0};cache.put('purge:'+ticket,JSON.stringify(plan),600);
+  return sharedReply_({ok:true,ticket:ticket,revision:manifest.revision,months:months,program:program,backup:{program:program,schedules:schedules,enrollments:(config.enrollments||[]).filter(function(e){return ids.includes(e.scheduleId)}),scheduleOverrides:(config.scheduleOverrides||[]).filter(function(e){return ids.includes(e.scheduleId)||e.programId===program.id})}});
+ }
+ var raw=typeof input.ticket==='string'?cache.get('purge:'+input.ticket):null,plan=raw?JSON.parse(raw):null;
+ if(!plan||plan.owner!==sharedHash_(token)||plan.programId!==program.id)return sharedReply_({error:'삭제 미리보기가 만료되었습니다. 처음부터 다시 확인해 주세요.'},409);
+ if(plan.revision!==manifest.revision)return sharedReply_({error:'다른 변경이 저장되었습니다. 최신 자료로 삭제 대상을 다시 확인해 주세요.'},409);
+ if(action==='backup'){
+  if(!plan.months.includes(input.month))return sharedReply_({error:'백업 조회 월을 확인해 주세요.'},400);
+  var month=sharedMonth_(book,manifest,input.month),entries=month.entries.filter(function(e){return e.programId===program.id}),reports=Object.keys(month.reports).filter(function(id){return month.reports[id].entry.programId===program.id}).map(function(id){return {id:id,report:month.reports[id]}});
+  if(!plan.backed.includes(input.month)){plan.backed.push(input.month);plan.entries+=entries.length;if(entries.length||reports.length)plan.affected.push(input.month)}cache.put('purge:'+input.ticket,JSON.stringify(plan),600);
+  return sharedReply_({ok:true,month:input.month,entries:entries,reports:reports,totalEntries:plan.entries});
+ }
+ if(action!=='start'||input.confirmName!==program.name||input.backupAcknowledged!==true||plan.backed.length!==plan.months.length)return sharedReply_({error:'백업과 프로그램명 확인을 완료해 주세요.'},400);
+ var ids=(config.schedules||[]).filter(function(s){return s.programId===program.id}).map(function(s){return s.id});
+ program.active=false;program.purgeStartedAt=new Date().toISOString();
+ var job={programId:program.id,name:program.name,scheduleIds:ids,months:plan.affected,index:0,prepared:false,reportIds:[],error:'',actor:actor};jobs.push(job);
+ sharedSavePurgeConfig_(book,manifest,config);cache.remove('purge:'+input.ticket);return sharedReply_(Object.assign({ok:true},sharedPurgeReply_(job)));
+}
+function sharedAdvanceProgramPurge_(book,manifest,config,job){
+ job.error='';
+ if((job.scrubs||[]).length){
+  var scrub=job.scrubs[0],live=scrub.month?manifest.months[scrub.month]:manifest.config,sheet=book.getSheetByName(scrub.sheet);
+  if(sheet){var start=live&&live.sheet===scrub.sheet?live.parts+1:1;if(scrub.parts>=start)sheet.getRange(start,1,scrub.parts-start+1,1).clearContent()}
+  job.scrubs.shift();sharedSavePurgeConfig_(book,manifest,config);return Object.assign({ok:true},sharedPurgeReply_(job));
+ }
+ if(job.phase==='cleanup'){config.purgeJobs=config.purgeJobs.filter(function(row){return row.programId!==job.programId});sharedSavePurgeConfig_(book,manifest,config);return {ok:true,done:true,programId:job.programId}}
+
+ if(job.index<job.months.length){
+  var key=job.months[job.index],month=sharedMonth_(book,manifest,key),sources=month.entries.filter(function(e){return e.programId===job.programId}),pairs={};
+  sources.forEach(function(e){pairs[e.date+':'+e.memberId]={date:e.date,memberId:e.memberId}});
+  if(!job.prepared){
+   sources.forEach(function(e){e.checked=false;e.participationOverride='exclude';e.version=(e.version||0)+1});
+   Object.keys(month.reports).forEach(function(id){var e=month.reports[id].entry;if(e.programId===job.programId)pairs[e.date+':'+e.memberId]={date:e.date,memberId:e.memberId}});
+   Object.keys(pairs).forEach(function(pair){sharedQueueReports_(month,pairs[pair].memberId,pairs[pair].date)});
+   job.reportIds=Object.keys(month.reports).filter(function(id){var report=month.reports[id],e=report.entry;if(e.programId===job.programId&&!sources.some(function(s){return s.memberId===e.memberId&&s.date===e.date})){report.entry=Object.assign({},e,{checked:false,version:e.version+1});report.sync='pending'}return !!pairs[e.date+':'+e.memberId]});
+   job.prepared=true;sharedSaveMonth_(book,manifest,key,month);sharedSavePurgeConfig_(book,manifest,config);return Object.assign({ok:true},sharedPurgeReply_(job));
+  }
+  var count=0,deadline=Date.now()+3500,ledger=book.getSheetByName('__CH_PERFORMANCE_V1'),journal=ledger&&ledger.getLastRow()>1?ledger.getRange(2,1,ledger.getLastRow()-1,1).getValues().map(function(row){return row[0]}):[];
+  for(var id of job.reportIds){var report=month.reports[id];if(!report||report.sync==='synced')continue;if(count>=8||Date.now()>=deadline)break;count++;
+   var projectionIds=[report.entry.id].concat((report.entry.reportStaff||[]).map(function(staff){return 'staff-'+sharedHash_(JSON.stringify([report.entry.id,staff.id]))}));
+   if(!report.entry.checked&&!projectionIds.some(function(id){return journal.includes(id)})){report.sync='synced';report.error='';continue}
+   try{writeProjectedPerformance_(report.entry,sharedProps_());report.sync='synced';report.error=''}catch(error){report.sync='error';report.error=error.message;job.error='시트 정리 확인 필요 · '+error.message}
+  }
+  if(job.reportIds.some(function(id){return month.reports[id]&&month.reports[id].sync!=='synced'})){sharedSaveMonth_(book,manifest,key,month);sharedSavePurgeConfig_(book,manifest,config);return Object.assign({ok:true},sharedPurgeReply_(job))}
+  var removedIds=sources.map(function(e){return e.id});month.entries=month.entries.filter(function(e){return e.programId!==job.programId});
+  Object.keys(month.requests||{}).forEach(function(id){var signature;try{signature=JSON.parse(month.requests[id].signature)}catch(error){return}if(signature.slice(3).some(function(value){return value===job.programId||job.scheduleIds.includes(value)}))delete month.requests[id]});
+  Object.keys(month.reports).forEach(function(id){var report=month.reports[id];if(report.entry.programId===job.programId&&!report.entry.checked){delete month.reports[id];return}for(var field of ['sourceIds','allSourceIds'])if(report.entry[field])report.entry[field]=report.entry[field].filter(function(id){return !removedIds.includes(id)})});
+  month.audit=(month.audit||[]).filter(function(row){return !removedIds.includes(row.entityId)});
+  var oldBank=manifest.months[key];job.scrubs=[{sheet:oldBank.sheet,parts:oldBank.parts,month:key}];job.index++;job.prepared=false;job.reportIds=[];sharedSaveMonth_(book,manifest,key,month);sharedSavePurgeConfig_(book,manifest,config);return Object.assign({ok:true},sharedPurgeReply_(job));
+ }
+ var tombstones=config.purgedEntities||(config.purgedEntities={});
+ for(var type of ['programs','schedules','enrollments','scheduleOverrides'])config[type]=(config[type]||[]).filter(function(row){var remove=type==='programs'?row.id===job.programId:type==='schedules'?row.programId===job.programId:job.scheduleIds.includes(row.scheduleId)||row.programId===job.programId;if(remove)tombstones[type+':'+row.id]=true;return !remove});
+ config.configAudit=(config.configAudit||[]).filter(function(row){return !tombstones[row.type+':'+row.entityId]});
+ var oldConfig=manifest.config;job.phase='cleanup';job.scrubs=[{sheet:oldConfig.sheet,parts:oldConfig.parts}];
+ sharedSavePurgeConfig_(book,manifest,config);return Object.assign({ok:true},sharedPurgeReply_(job));
+}
+
 function sharedRpc(request,origin,channel){
  if(!sharedOriginAllowed_(origin)||!/^[-a-zA-Z0-9]{20,100}$/.test(channel||''))return sharedReply_({error:'허용되지 않은 연결입니다.'},403);
  if(!request||typeof request.path!=='string'||!['GET','POST'].includes(request.method)||JSON.stringify(request).length>1500000)return sharedReply_({error:'요청 형식 또는 크기 오류'},400);
@@ -224,17 +303,17 @@ function sharedRpc(request,origin,channel){
   var staff=staffId&&config?(config.staff||[]).find(function(person){return person.id===staffId&&person.active!==false}):null;
   if(staffId&&!staff)admin=false;
   var actor=staff?staff.name:admin?'공용 관리자':'참여자 출석';
-  if(path==='/api/team/status')return sharedReply_({service:'ch-team-api',configured:true,initialized:manifest.initialized,authenticated:admin,staffId:staff?staff.id:'',googleConfigured:!!sharedProps_().getProperty('SPREADSHEET_ID'),staffReportTabs:true,weekdayReportTabs:true,participantReportOwners:true,memberPatch:true,caseManagerBatch:true,participationPeriods:true,programCheckin:true,calendarNotes:true,calendarEntries:true,local:false,backend:'google'});
+  if(path==='/api/team/status')return sharedReply_({service:'ch-team-api',configured:true,initialized:manifest.initialized,authenticated:admin,staffId:staff?staff.id:'',googleConfigured:!!sharedProps_().getProperty('SPREADSHEET_ID'),staffReportTabs:true,weekdayReportTabs:true,participantReportOwners:true,memberPatch:true,caseManagerBatch:true,participationPeriods:true,programCheckin:true,programPurge:true,calendarNotes:true,calendarEntries:true,local:false,backend:'google'});
   if(path==='/api/integration-status')return sharedReply_({service:'ch-performance-api',configured:sharedReportsConfigured_(),authenticated:admin});
   if(path.startsWith('/api/team/photos/')||path==='/api/team/photo')return sharedPhoto_(book,request,admin);
   if(path==='/api/team/state'){
    if(!manifest.initialized)return sharedReply_({initialized:false});var monthKey=admin?(params.month||today.slice(0,7)):today.slice(0,7);if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(monthKey))throw Error('조회 월 오류');
    if(Number(params.since||0)===manifest.revision)return sharedReply_({initialized:true,unchanged:true,revision:manifest.revision});
    var month=sharedMonth_(book,manifest,monthKey),visibleConfig=JSON.parse(JSON.stringify(config));
-   delete visibleConfig.configAudit;
+   delete visibleConfig.configAudit;delete visibleConfig.purgeJobs;delete visibleConfig.purgedEntities;
    if(!admin){visibleConfig.members=visibleConfig.members.filter(function(m){return m.active!==false}).map(function(m){return {id:m.id,name:m.name,communityId:m.communityId,active:true,history:[{from:'1900-01-01',communityId:m.communityId}],photo:m.photo||null}});visibleConfig.staff=[];visibleConfig.caseAssignments=[];delete visibleConfig.calendarNotes}
    var publicRecords={},publicDays={};Object.keys(month.records).forEach(function(key){if(admin||key.startsWith(today+':')){publicRecords[key]=month.records[key];publicDays[key]=month.days[key]}});
-   return sharedReply_({initialized:true,revision:manifest.revision,config:visibleConfig,records:publicRecords,days:publicDays,programCheckins:monthKey===today.slice(0,7)?sharedProgramCheckins_(month,today):undefined,entries:admin?month.entries:[],audit:admin?(config.configAudit||[]).concat(month.audit||[]):[]});
+   return sharedReply_({initialized:true,revision:manifest.revision,config:visibleConfig,purgedProgramIds:admin?Object.keys(config.purgedEntities||{}).filter(function(key){return key.indexOf('programs:')===0}).map(function(key){return key.slice(9)}):[],records:publicRecords,days:publicDays,programCheckins:monthKey===today.slice(0,7)?sharedProgramCheckins_(month,today):undefined,entries:admin?month.entries:[],audit:admin?(config.configAudit||[]).concat(month.audit||[]):[]});
   }
   if(path==='/api/team/checkin'||path==='/api/team/attendance'){
    var publicCheckin=path==='/api/team/checkin';if(!publicCheckin&&!admin)return sharedReply_({error:'관리자 인증이 필요합니다.'},401);
@@ -293,6 +372,7 @@ function sharedRpc(request,origin,channel){
    return sharedReply_(Object.assign({},result,{revision:manifest.revision,reportReceipt:sharedReportReceipt_(month,member.id,date)}));
   }
   if(!admin)return sharedReply_({error:'관리자 인증이 필요합니다.'},401);
+  if(path==='/api/team/program-purge'&&request.method==='POST')return sharedPurgeProgram_(book,manifest,config,input,request.token,today,actor);
   if(path==='/api/team/case-managers'&&request.method==='POST'){
    if(!manifest.initialized||!config)return sharedReply_({error:'공동 저장소를 먼저 준비해 주세요.'},409);
    if(!Array.isArray(input.members)||!input.members.length||input.members.length>200||typeof input.staffId!=='string')return sharedReply_({error:'변경할 참여자와 사례관리 담당을 확인해 주세요.'},400);
@@ -342,6 +422,7 @@ function sharedRpc(request,origin,channel){
    var d=input.date,monthKey=String(d||'').slice(0,7);
    if(!config||!/^\d{4}-\d{2}-\d{2}$/.test(d)||d>today||typeof input.checked!=='boolean'||!Number.isInteger(input.expectedVersion)||input.expectedVersion<0)return sharedReply_({error:'참여 실적 정정 요청을 확인해 주세요.'},400);
    var month=sharedMonth_(book,manifest,monthKey),model=sharedModel_(config,month);
+   if((config.purgeJobs||[]).some(function(job){return job.scheduleIds.includes(input.scheduleId)||month.entries.some(function(e){return e.id===input.entryId&&e.programId===job.programId})}))return sharedReply_({error:'완전 삭제 중인 프로그램은 정정할 수 없습니다.'},409);
    model.holidays=sharedHolidays_(d.slice(0,4)).dates;
    model.setProgramAttendance(month.records,input,actor);
    month.entries=model.data.entries;
@@ -359,7 +440,7 @@ function sharedRpc(request,origin,channel){
   }
   if(path==='/api/team/config'&&request.method==='POST'){
    if(!config)throw Error('운영 자료를 먼저 초기화해 주세요.');if(!Array.isArray(input.changes)||input.changes.length>2000)throw Error('변경 자료 오류');var next=JSON.parse(JSON.stringify(config)),appliedChanges=[];
-   for(var change of input.changes){if(!SHARED_TYPES_.includes(change.type)||!change.after||change.after.id!==change.id)throw Error('항목 형식 오류');var rows=next[change.type]||(next[change.type]=[]),index=rows.findIndex(function(r){return r.id===change.id}),actual=index>=0?rows[index]:null;
+   for(var change of input.changes){if(change.after&&sharedPurgeBlocked_(config,change.type,change.after))return sharedReply_({error:'완전 삭제 중이거나 삭제된 프로그램입니다. 최신 자료를 불러오세요.'},409);if(!SHARED_TYPES_.includes(change.type)||!change.after||change.after.id!==change.id)throw Error('항목 형식 오류');var rows=next[change.type]||(next[change.type]=[]),index=rows.findIndex(function(r){return r.id===change.id}),actual=index>=0?rows[index]:null;
     if(sharedComparable_(actual)===sharedComparable_(change.after))continue;
     if(sharedComparable_(actual)!==sharedComparable_(change.before||null))return sharedReply_({error:'다른 직원이 이 항목을 먼저 수정했습니다. 변경 내용을 비교해 주세요.',conflict:{type:change.type,id:change.id,current:actual}},409);
     if(index>=0)rows[index]=change.after;else rows.push(change.after);appliedChanges.push(change);
@@ -387,16 +468,19 @@ function sharedRpc(request,origin,channel){
    sharedCommit_(book,manifest);return sharedReply_({ok:true,reconcile:remaining>0});
   }
   if(path==='/api/team/maintenance'||path==='/api/team/sync'){
-   var budget=3,reportBudget=12,deadline=Date.now()+4000,remaining=0,remainingReports=0,anyChanged=false;
+   if((config.purgeJobs||[]).length){sharedAdvanceProgramPurge_(book,manifest,config,config.purgeJobs[0]);config=sharedConfig_(book,manifest)}
+   var budget=3,reportBudget=12,deadline=Date.now()+4000,remaining=0,remainingReports=0,anyChanged=false,metadataChanged=false;
    Object.keys(manifest.months).reverse().forEach(function(key){
+    if(manifest.months[key].pending===false)return;
     var month=sharedMonth_(book,manifest,key),changed=false;
     if(budget>0&&Date.now()<deadline){var done=sharedReconcile_(config,month,budget);budget-=done;changed=done>0}
     if(reportBudget>0){var flushed=sharedFlushMonth_(month,reportBudget,deadline);reportBudget-=flushed;if(flushed)changed=true}
     remaining+=month.reconcile.length;
     remainingReports+=Object.keys(month.reports).filter(function(id){return month.reports[id].sync!=='synced'}).length;
     if(changed){sharedSaveMonth_(book,manifest,key,month);anyChanged=true}
+    else if(manifest.months[key].pending!==sharedMonthPending_(month)){manifest.months[key].pending=sharedMonthPending_(month);metadataChanged=true}
    });
-   if(anyChanged)sharedCommit_(book,manifest);return sharedReply_({ok:true,remaining,remainingReports});
+   if(anyChanged||metadataChanged)sharedCommit_(book,manifest);return sharedReply_({ok:true,remaining:remaining+(config.purgeJobs||[]).length,remainingReports});
   }
   return sharedReply_({error:'지원하지 않는 API 경로'},404);
  }catch(error){return sharedReply_({error:error.message||'Google 저장 오류'},error.conflict?409:500)}finally{

@@ -208,6 +208,11 @@
     static closureContains(item,d){return item.date<=d&&d<=(item.endDate||item.date)}
     static validateClosure(item){for(const d of [item.date,item.endDate||item.date]){if(typeof d!=='string'||!/^20\d{2}-\d{2}-\d{2}$/.test(d)||!Number.isFinite(Date.parse(d+'T12:00:00Z'))||new Date(d+'T12:00:00Z').toISOString().slice(0,10)!==d)throw Error('올바른 휴무 날짜를 입력해 주세요.')}if((item.endDate||item.date)<item.date)throw Error('종료일은 시작일 이후로 선택해 주세요.');if(typeof item.name!=='string'||!item.name.trim()||item.name.length>80)throw Error('휴무 이름은 1~80자로 입력해 주세요.');if(typeof item.active!=='boolean')throw Error('휴무 상태를 확인해 주세요.')}
     holidayName(d){return [this.holidays?.[d],...(this.data.closures||[]).filter(c=>c.active!==false&&ManagementStore.closureContains(c,d)).map(c=>c.name)].filter(Boolean).join(' · ')}
+    programArchived(id,today){
+      const program=this.find('programs',id);if(!program||program.active===false)return true;
+      const schedules=this.data.schedules.filter(s=>s.programId===id&&s.active!==false&&(!s.validFrom||!s.validTo||s.validFrom<=s.validTo));
+      return schedules.length>0&&schedules.every(s=>Boolean(s.date||s.validTo)&&(s.date||s.validTo)<today);
+    }
     programEnabled(id,d){const p=this.find('programs',id);return !!p&&p.active!==false&&([...p.enabledHistory||[]].filter(h=>h.from<=d).sort((a,b)=>a.from.localeCompare(b.from)).at(-1)?.enabled??true)}
     setProgramEnabled(id,enabled,from){const p=this.find('programs',id);if(!p||p.active===false)throw Error('사용 중인 프로그램을 선택해 주세요.');if(typeof enabled!=='boolean'||!/^\d{4}-\d{2}-\d{2}$/.test(from))throw Error('운영 상태를 확인해 주세요.');const before=clone(p);p.enabledHistory=[...(p.enabledHistory||[]).filter(h=>h.from!==from),{from,enabled}];this.audit(enabled?'프로그램 활성화':'프로그램 비활성화','programs',id,before,p)}
     afternoonClosed(d){

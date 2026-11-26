@@ -40,7 +40,7 @@
   const rows=[...members.values()].sort((a,b)=>a.name.localeCompare(b.name,'ko')||a.id.localeCompare(b.id));
   return {programId,name:program.name,from,to,days,daily,dayInfo:Object.fromEntries(daily.map(day=>[day.date,day])),weeks:weekRows,members:rows,actual:actual.sort((a,b)=>a.date.localeCompare(b.date)||a.name.localeCompare(b.name,'ko')),totals:{operating:daily.filter(d=>d.operating).length,expected:daily.reduce((n,d)=>n+d.expected,0),present:actual.length,absent:rows.reduce((n,m)=>n+m.absent,0),pending:rows.reduce((n,m)=>n+m.pending,0),unique:rows.filter(m=>m.present).length,future:rows.reduce((n,m)=>n+m.future,0)}};
  }
- function buildAll(store,records,{from,to,today}){
+ function buildAll(store,records,{from,to,today,scope='all'}){
   const range=dates(from,to),schedules=new Map(),byProgram=new Map(),people=new Set(),personDays=new Set(),weeklyPeople=new Map(),rows=[],weekTotals=new Map();
   // Share schedule expansion for every programme and index entries once for the whole query.
   for(const day of range)schedules.set(day,store.schedulesOn(day));
@@ -48,6 +48,7 @@
   const totals={operating:0,expected:0,present:0,absent:0,pending:0,future:0,unique:0,personDays:0};
   const monthKeys=months(from,to);
   for(const program of store.data.programs){
+   if(scope!=='all'&&store.programArchived(program.id,today)!==(scope==='archived'))continue;
    if(program.active===false&&!byProgram.has(program.id)&&!range.some(d=>schedules.get(d).some(s=>s.program.id===program.id)))continue;
    const report=build(store,records,{programId:program.id,from,to,today},{schedules,entries:byProgram.get(program.id)||[]});
    const monthly=Object.fromEntries(monthKeys.map(key=>[key,0])),staff=new Set();
@@ -60,7 +61,7 @@
   }
   totals.unique=people.size;totals.personDays=personDays.size;
   const weeks=[...weekTotals.values()].map(week=>({...week,unique:weeklyPeople.get(week.key)?.size||0}));
-  return {kind:'all',name:'전체 프로그램 통합',from,to,days:range,months:monthKeys,weeks,rows:rows.sort((a,b)=>a.name.localeCompare(b.name,'ko')),totals};
+  return {kind:'all',name:(scope==='archived'?'종료·보관 프로그램':scope==='current'?'운영·예정 프로그램':'전체 프로그램')+' 통합',scope,from,to,days:range,months:monthKeys,weeks,rows:rows.sort((a,b)=>a.name.localeCompare(b.name,'ko')),totals};
  }
  const api={build,buildAll,dates,months};if(typeof module!=='undefined')module.exports=api;else root.ProgramReports=api;
 })(typeof globalThis!=='undefined'?globalThis:this);

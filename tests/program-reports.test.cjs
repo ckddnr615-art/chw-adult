@@ -82,5 +82,31 @@ test('통합표의 주차·월별 전환과 CSV는 전체 프로그램 합계를
  const ctx=vm.createContext({date:'2026-11-26',management:store,heading:t=>'<h1>'+t+'</h1>',esc:String,report});vm.runInContext(source.slice(0,source.indexOf('async function queryProgramReports(')),ctx);vm.runInContext("programReportState.result=report;programReportState.overview='weeks'",ctx);
  let html=ctx.programReportsPage();assert.match(html,/전체 프로그램 통합표/);assert.match(html,/data-program-report-detail="program-1"/);assert.match(html,/주차별 통합/);assert.match(html,/월별 통합/);assert.match(html,/전체 합계/);assert.match(html,/전체 프로그램 \(통합\)/);
  const csv=ctx.programOverviewCsv(report);assert.match(csv.at(-1)[0],/전체 합계/);assert.equal(csv.at(-1).at(-3),1);
- vm.runInContext("programReportState.overview='months'",ctx);assert.equal(ctx.programOverviewColumns(report).length,1);assert.equal(ctx.programOverviewColumns(report)[0].label,'2026-11');
+ vm.runInContext("programReportState.overview='months'",ctx);assert.equal(ctx.programOverviewColumns(report).length,1);assert.equal(ctx.programOverviewColumns(report)[0].label,'11월');
+});
+
+test('종료·보관 분류는 삭제 항목과 기간이 끝난 프로그램을 구분해 기본 목록에서 제외한다',()=>{
+ const {store}=fixture();assert.equal(store.programArchived('program-1','2026-11-26'),false);
+ store.data.schedules[0].validTo='2026-11-25';assert.equal(store.programArchived('program-1','2026-11-26'),true);
+ store.data.schedules.push({...store.data.schedules[0],id:'future',validFrom:'2027-01-01',validTo:'2027-12-31'});assert.equal(store.programArchived('program-1','2026-11-26'),false);
+ store.data.programs[0].active=false;assert.equal(store.programArchived('program-1','2026-11-26'),true);
+});
+test('종료 프로그램 조회와 통합 합계는 선택한 구분을 따르며 전체 조회에서 기록을 보존한다',()=>{
+ const {store,entry}=fixture();store.data.programs.push({...store.data.programs[0],id:'ended',name:'종료 프로그램',active:false});store.data.entries=[entry(),entry({id:'old',programId:'ended',scheduleId:'old-schedule'})];
+ const options={from:'2026-11-23',to:'2026-11-23',today:'2026-11-26'};
+ const current=Reports.buildAll(store,{}, {...options,scope:'current'}),ended=Reports.buildAll(store,{}, {...options,scope:'archived'}),all=Reports.buildAll(store,{}, options);
+ assert.equal(current.rows.length,1);assert.equal(ended.rows.length,1);assert.equal(ended.rows[0].id,'ended');assert.equal(all.totals.present,current.totals.present+ended.totals.present);assert.equal(store.data.entries.length,2);
+});
+
+test('연간 월별 표는 프로그램명과 1~12월 및 총합만 표시하고 CSV 합계를 맞춘다',()=>{
+ const source=fs.readFileSync(require.resolve('../site/program-reports.js'),'utf8'),{store,entry}=fixture();store.data.entries=[entry({date:'2026-01-05'}),entry({id:'november',date:'2026-11-23'})];const report=Reports.buildAll(store,{}, {from:'2026-01-01',to:'2026-12-31',today:'2026-11-26'});
+ const ctx=vm.createContext({date:'2026-11-26',management:store,heading:t=>'<h1>'+t+'</h1>',esc:String,report});vm.runInContext(source.slice(0,source.indexOf('async function queryProgramReports(')),ctx);vm.runInContext("programReportState.result=report;programReportState.overview='months'",ctx);
+ const html=ctx.programReportsPage(),table=html.slice(html.indexOf('<table class="program-report-grid">'),html.indexOf('</table>',html.indexOf('<table class="program-report-grid">')));
+ assert.match(table,/프로그램명/);assert.match(table,/>1월</);assert.match(table,/>12월</);assert.match(table,/>총합</);assert.doesNotMatch(table,/실인원|확인 대기|기록 당시/);
+ const csv=ctx.programOverviewCsv(report);assert.equal(csv[0].length,14);assert.equal(csv[1][1],1);assert.equal(csv[1][11],1);assert.equal(csv[1].at(-1),2);assert.equal(csv.at(-1).at(-1),2);
+});
+test('연간 조회는 해당 연도 12개월만 순차 읽고 월별 통합으로 표시한다',async()=>{
+ const source=fs.readFileSync(require.resolve('../site/program-reports.js'),'utf8'),{store}=fixture(),months=[],state={busy:false,mode:'year',year:'2026',programId:'*',scope:'all'};
+ const ctx=vm.createContext({programReportState:state,adminSession:true,team:{active:true},configPending:false,configSaving:false,ProgramReports:Reports,management:store,records:{},date:'2026-11-26',location:{hash:'#program-reports'},render(){},fetch:async()=>({ok:true,json:async()=>({authenticated:true})}),ensureHolidayYear:async()=>{},loadTeamMonth:async month=>{months.push(month);return true},$:()=>null,Intl,Date});
+ vm.runInContext(source.slice(source.indexOf('async function queryProgramReports('),source.indexOf('function exportProgramReport(')),ctx);await ctx.queryProgramReports();assert.equal(months.length,12);assert.equal(months[0],'2026-01');assert.equal(months[11],'2026-12');assert.equal(state.overview,'months');assert.equal(state.result.months.length,12);assert.equal(state.result.to,'2026-12-31');
 });
