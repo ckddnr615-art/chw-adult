@@ -60,3 +60,27 @@ test('요일별 담당·인원이 다르면 해당 날짜 배정과 기록 당�
  store.data.entries=[entry({date:'2026-11-24',reportStaff:[{id:'tue',name:'화요일 담당'}]}),entry({id:'wed-entry',date:'2026-11-25',memberId:'m1',scheduleId:'wednesday',reportStaff:[{id:'wed',name:'수요일 담당'}]})];
  const r=Reports.build(store,{}, {programId:'program-1',from:'2026-11-24',to:'2026-11-25',today:'2026-11-26'});assert.equal(r.totals.present,2);assert.equal(r.members[0].cells['2026-11-25'],undefined);assert.equal(r.members[1].cells['2026-11-24'],undefined);assert.deepEqual(r.actual.map(e=>e.staff),['화요일 담당','수요일 담당']);
 });
+
+test('전체 통합표는 프로그램별 실적을 합산하고 전체 실인원과 일자별 출석 중복을 제외한다',()=>{
+ const {store,entry}=fixture();store.data.programs.push({...store.data.programs[0],id:'program-2',name:'두 번째 프로그램'});store.data.schedules.push({...store.data.schedules[0],id:'schedule-2',programId:'program-2'});
+ store.data.entries=[entry(),entry({id:'second-program',programId:'program-2',scheduleId:'schedule-2',reportStaff:[{id:'other',name:'두 번째 담당'}]})];
+ const before=JSON.stringify(store.data),r=Reports.buildAll(store,{}, {from:'2026-11-23',to:'2026-11-24',today:'2026-11-26'});
+ assert.equal(r.rows.length,2);assert.equal(r.totals.present,2);assert.equal(r.totals.unique,1);assert.equal(r.totals.personDays,1);assert.equal(r.weeks[0].present,2);assert.equal(r.weeks[0].unique,1);assert.equal(r.rows.find(p=>p.id==='program-2').staff,'두 번째 담당');assert.equal(JSON.stringify(store.data),before);
+});
+test('전체 통합은 월 경계별 합계와 종료 프로그램의 과거 실적을 보존한다',()=>{
+ const {store,entry}=fixture();store.data.entries=[entry({date:'2026-10-30'}),entry({id:'nov',date:'2026-11-02'})];store.data.programs[0].active=false;
+ const r=Reports.buildAll(store,{}, {from:'2026-10-01',to:'2026-11-30',today:'2026-11-26'});
+ assert.equal(r.rows.length,1);assert.equal(r.rows[0].active,false);assert.deepEqual(r.rows[0].monthly,{'2026-10':1,'2026-11':1});assert.equal(r.totals.present,2);assert.equal(r.totals.unique,1);assert.equal(r.totals.personDays,2);
+});
+test('전체 프로그램은 날짜별 일정을 공유하고 원본 실적은 한 번만 읽는다',()=>{
+ const {store,entry}=fixture(70);for(let i=2;i<=10;i++){store.data.programs.push({...store.data.programs[0],id:'program-'+i,name:'프로그램 '+i});store.data.schedules.push({...store.data.schedules[0],id:'schedule-'+i,programId:'program-'+i})}
+ store.data.entries=Array.from({length:70},(_,i)=>entry({id:'e'+i,memberId:'m'+i}));const entries=store.data.entries;let scans=0,scheduleReads=0;entries[Symbol.iterator]=function*(){scans++;yield* Array.from({length:70},(_,i)=>entries[i])};const read=store.schedulesOn.bind(store);store.schedulesOn=day=>{scheduleReads++;return read(day)};
+ const r=Reports.buildAll(store,{}, {from:'2026-11-01',to:'2026-11-30',today:'2026-11-26'});assert.equal(r.rows.length,10);assert.equal(scans,1);assert.equal(scheduleReads,30);assert.equal(r.totals.present,70);
+});
+test('통합표의 주차·월별 전환과 CSV는 전체 프로그램 합계를 포함한다',()=>{
+ const source=fs.readFileSync(require.resolve('../site/program-reports.js'),'utf8'),{store,entry}=fixture();store.data.entries=[entry()];const report=Reports.buildAll(store,{}, {from:'2026-11-01',to:'2026-11-30',today:'2026-11-26'});
+ const ctx=vm.createContext({date:'2026-11-26',management:store,heading:t=>'<h1>'+t+'</h1>',esc:String,report});vm.runInContext(source.slice(0,source.indexOf('async function queryProgramReports(')),ctx);vm.runInContext("programReportState.result=report;programReportState.overview='weeks'",ctx);
+ let html=ctx.programReportsPage();assert.match(html,/전체 프로그램 통합표/);assert.match(html,/data-program-report-detail="program-1"/);assert.match(html,/주차별 통합/);assert.match(html,/월별 통합/);assert.match(html,/전체 합계/);assert.match(html,/전체 프로그램 \(통합\)/);
+ const csv=ctx.programOverviewCsv(report);assert.match(csv.at(-1)[0],/전체 합계/);assert.equal(csv.at(-1).at(-3),1);
+ vm.runInContext("programReportState.overview='months'",ctx);assert.equal(ctx.programOverviewColumns(report).length,1);assert.equal(ctx.programOverviewColumns(report)[0].label,'2026-11');
+});

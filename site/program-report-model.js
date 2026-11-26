@@ -7,13 +7,13 @@
   const days=[];for(let d=from;d<=to;d=dayAfter(d)){if(days.length===366)throw Error('한 번에 최대 366일까지 조회할 수 있습니다.');days.push(d)}return days;
  }
  function months(from,to){dates(from,to);const out=[];for(let m=from.slice(0,7);m<=to.slice(0,7);){out.push(m);const d=new Date(m+'-01T12:00:00Z');d.setUTCMonth(d.getUTCMonth()+1);m=d.toISOString().slice(0,7)}return out}
- function build(store,records,{programId,from,to,today}){
+ function build(store,records,{programId,from,to,today},prepared=null){
   const days=dates(from,to),program=store.find('programs',programId);if(!program)throw Error('프로그램을 선택해 주세요.');
   const entries=new Map(),members=new Map(),weeks=new Map(),daily=[],actual=[];
-  for(const entry of store.data.entries){if(entry.programId!==programId||entry.date<from||entry.date>to)continue;let day=entries.get(entry.date);if(!day)entries.set(entry.date,day=[]);day.push(entry)}
+  for(const entry of prepared?prepared.entries:store.data.entries){if(entry.programId!==programId||entry.date<from||entry.date>to)continue;let day=entries.get(entry.date);if(!day)entries.set(entry.date,day=[]);day.push(entry)}
   const weekFor=d=>{const weekday=new Date(d+'T12:00:00Z').getUTCDay(),key=dayAfter(d,-((weekday+6)%7));if(!weeks.has(key))weeks.set(key,{key,from:d,to:d,operating:0,expected:0,present:0,absent:0,pending:0,future:0,unique:new Set()});const week=weeks.get(key);week.to=d;return week};
   for(const d of days){
-   const week=weekFor(d),all=store.schedulesOn(d),schedules=all.filter(s=>s.program.id===programId),targets=new Map(),saved=entries.get(d)||[];
+   const week=weekFor(d),all=prepared?prepared.schedules.get(d):store.schedulesOn(d),schedules=all.filter(s=>s.program.id===programId),targets=new Map(),saved=entries.get(d)||[];
    const target=(id,name)=>{if(!targets.has(id))targets.set(id,{id,name,scheduled:new Map(),entries:[]});return targets.get(id)};
    for(const s of schedules)for(const m of store.eligibleMembers(s,d,all))target(m.id,m.name).scheduled.set(s.id,s);
    for(const e of saved)target(e.memberId,e.name).entries.push(e);
@@ -40,5 +40,27 @@
   const rows=[...members.values()].sort((a,b)=>a.name.localeCompare(b.name,'ko')||a.id.localeCompare(b.id));
   return {programId,name:program.name,from,to,days,daily,dayInfo:Object.fromEntries(daily.map(day=>[day.date,day])),weeks:weekRows,members:rows,actual:actual.sort((a,b)=>a.date.localeCompare(b.date)||a.name.localeCompare(b.name,'ko')),totals:{operating:daily.filter(d=>d.operating).length,expected:daily.reduce((n,d)=>n+d.expected,0),present:actual.length,absent:rows.reduce((n,m)=>n+m.absent,0),pending:rows.reduce((n,m)=>n+m.pending,0),unique:rows.filter(m=>m.present).length,future:rows.reduce((n,m)=>n+m.future,0)}};
  }
- const api={build,dates,months};if(typeof module!=='undefined')module.exports=api;else root.ProgramReports=api;
+ function buildAll(store,records,{from,to,today}){
+  const range=dates(from,to),schedules=new Map(),byProgram=new Map(),people=new Set(),personDays=new Set(),weeklyPeople=new Map(),rows=[],weekTotals=new Map();
+  // Share schedule expansion for every programme and index entries once for the whole query.
+  for(const day of range)schedules.set(day,store.schedulesOn(day));
+  for(const entry of store.data.entries)if(entry.date>=from&&entry.date<=to){if(!byProgram.has(entry.programId))byProgram.set(entry.programId,[]);byProgram.get(entry.programId).push(entry)}
+  const totals={operating:0,expected:0,present:0,absent:0,pending:0,future:0,unique:0,personDays:0};
+  const monthKeys=months(from,to);
+  for(const program of store.data.programs){
+   if(program.active===false&&!byProgram.has(program.id)&&!range.some(d=>schedules.get(d).some(s=>s.program.id===program.id)))continue;
+   const report=build(store,records,{programId:program.id,from,to,today},{schedules,entries:byProgram.get(program.id)||[]});
+   const monthly=Object.fromEntries(monthKeys.map(key=>[key,0])),staff=new Set();
+   for(const entry of report.actual){people.add(entry.memberId);personDays.add(entry.date+':'+entry.memberId);monthly[entry.date.slice(0,7)]++;if(entry.staff!=='실적 담당 미지정')entry.staff.split(' · ').forEach(name=>staff.add(name));
+    const weekday=new Date(entry.date+'T12:00:00Z').getUTCDay(),key=dayAfter(entry.date,-((weekday+6)%7));if(!weeklyPeople.has(key))weeklyPeople.set(key,new Set());weeklyPeople.get(key).add(entry.memberId);
+   }
+   for(const key of ['operating','expected','present','absent','pending','future'])totals[key]+=report.totals[key];
+   for(const week of report.weeks){if(!weekTotals.has(week.key))weekTotals.set(week.key,{...week,unique:0,operating:0,expected:0,present:0,absent:0,pending:0,future:0});const total=weekTotals.get(week.key);for(const key of ['operating','expected','present','absent','pending','future'])total[key]+=week[key]}
+   rows.push({id:program.id,name:program.name,active:program.active!==false,totals:report.totals,staff:[...staff].join(' · ')||'참여 실적 없음',weekly:Object.fromEntries(report.weeks.map(w=>[w.key,w.present])),monthly});
+  }
+  totals.unique=people.size;totals.personDays=personDays.size;
+  const weeks=[...weekTotals.values()].map(week=>({...week,unique:weeklyPeople.get(week.key)?.size||0}));
+  return {kind:'all',name:'전체 프로그램 통합',from,to,days:range,months:monthKeys,weeks,rows:rows.sort((a,b)=>a.name.localeCompare(b.name,'ko')),totals};
+ }
+ const api={build,buildAll,dates,months};if(typeof module!=='undefined')module.exports=api;else root.ProgramReports=api;
 })(typeof globalThis!=='undefined'?globalThis:this);
