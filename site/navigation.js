@@ -9,7 +9,7 @@ function operationsHub(){
  const content={affiliations:()=>catalogPage('communities'),staff:staffPage,closures:closurePage};
  return heading('운영 관리','소속·직원·기관 휴무일을 관리합니다.')+workspaceTabs(Object.entries(routeLabels),operationsView,'data-operations-view','운영 관리 하위 메뉴')+subpage(content[operationsView]());
 }
-function participantsHub(){return heading('참여자 관리','참여자 정보와 담당 사례관리자를 관리합니다. 시간표는 왼쪽 시간표 메뉴에서 확인하세요.')+subpage(catalogPage('members'),'참여자 명단')}
+function participantsHub(){return catalogPage('members')}
 function programWorkspace(){
  const area=programManagementView==='areas',weekly=programManagementView==='weekly';
  const tabs=workspaceTabs([['programs','프로그램'],['areas','영역']],area?'areas':'programs','data-program-management-view','프로그램 관리 하위 메뉴');

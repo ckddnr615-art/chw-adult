@@ -1,0 +1,87 @@
+/* Shared visual rules. Screen-only so the printed attendance register is preserved. */
+@media screen {
+  body { --workspace-navy:#345591; --workspace-border:#dce3ed; --workspace-muted:#53657b; }
+  body:not(.participant-mode) { background:#f3f5f8; }
+  body:not(.participant-mode) main { max-width:1480px; padding:28px 30px 48px; }
+  body:not(.participant-mode) header { padding:14px 30px; border-bottom:1px solid var(--workspace-border); box-shadow:none; }
+  body:not(.participant-mode) .headeractions { gap:8px; }
+  body:not(.participant-mode) .headeractions > .avatar,
+  body:not(.participant-mode) .headeractions .localstate,
+  body:not(.participant-mode) .headeractions #adminEntry { display:none; }
+  body:not(.participant-mode) .intro { gap:16px; margin-bottom:24px; align-items:center; }
+  body:not(.participant-mode) .intro > div > .eyebrow { display:none; }
+  body:not(.participant-mode) .intro h1 { font-size:30px; line-height:1.4; letter-spacing:-.7px; margin:0 0 8px; }
+  body:not(.participant-mode) .intro h2 { font-size:23px; line-height:1.5; margin:0 0 8px; }
+  body:not(.participant-mode) .intro p { font-size:15px; line-height:1.7; color:var(--workspace-muted); margin:0; }
+  body:not(.participant-mode) :is(.panel,.metric) { border:1px solid var(--workspace-border); border-radius:16px; box-shadow:0 2px 6px #233c5a03; }
+  body:not(.participant-mode) .panel { padding:24px; margin-bottom:24px; }
+  body:not(.participant-mode) .panelhead { margin-bottom:18px; align-items:center; }
+  body:not(.participant-mode) .panelhead h2 { font-size:22px; line-height:1.5; }
+  body:not(.participant-mode) .metrics { gap:14px; margin-bottom:24px; }
+  body:not(.participant-mode) .metric { padding:20px 22px; }
+  body:not(.participant-mode) .metric > small { font-size:15px; }
+  body:not(.participant-mode) .team-status { margin-bottom:12px; padding:10px 14px; border-radius:10px; font-size:14px; line-height:1.6; }
+  body:not(.participant-mode) .team-status:not(.error) { background:#eef4f9; border-color:#dae5ef; color:#405c76; }
+  body:not(.participant-mode) .holiday-status { padding:10px 14px; margin-bottom:12px; border-radius:10px; font-size:14px; line-height:1.6; }
+  body:not(.participant-mode) :is(.primary,.secondary,.danger) { border-radius:9px; min-height:44px; padding:10px 14px; font-size:16px; line-height:1.4; }
+  body:not(.participant-mode) :is(.filters,.analysis-filters) { gap:12px; margin-bottom:20px; }
+  body:not(.participant-mode) :is(.filters,.analysis-filters) label { font-size:15px; line-height:1.5; gap:7px; }
+  body:not(.participant-mode) :is(input:not([type=checkbox]):not([type=radio]):not([type=range]),select,textarea) { border-color:#ccd7e5; border-radius:9px; font-size:16px; line-height:1.5; }
+  body:not(.participant-mode) :is(input,select,textarea):focus-visible { outline:3px solid #b4cdf7; outline-offset:2px; }
+  body:not(.participant-mode) .admin-table { border-collapse:separate; border-spacing:0; font-size:16px; }
+  body:not(.participant-mode) .admin-table :is(th,td) { padding:14px 16px; border-color:var(--workspace-border); line-height:1.6; vertical-align:middle; }
+  body:not(.participant-mode) .admin-table thead th { background:#edf2f8; color:#344d6c; font-size:15px; font-weight:700; }
+  body:not(.participant-mode) .admin-table tbody tr:nth-child(even) td { background:#f8fafc; }
+  body:not(.participant-mode) .admin-table td.rowactions { display:table-cell; white-space:normal; min-width:190px; }
+  body:not(.participant-mode) .admin-table .rowactions button { margin:3px; }
+  body:not(.participant-mode) .schedule-row-actions { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+  body:not(.participant-mode) .member-name-cell .small-portrait { width:48px; height:48px; border-radius:12px; margin-right:12px; }
+  body:not(.participant-mode) .member-name-cell .photo-fallback { font-size:22px; }
+  body:not(.participant-mode) .formhint { color:var(--workspace-muted); font-size:14px; line-height:1.7; }
+  body:not(.participant-mode) .program-period { margin-top:6px; font-size:16px; color:var(--workspace-muted); }
+  body:not(.participant-mode) .case-manager-bulk { padding:16px; background:#f4f7fc; border-color:#d5e0ef; }
+  body:not(.participant-mode) .management-tabs { padding:5px; gap:4px; border-radius:12px; margin-bottom:24px; }
+  body:not(.participant-mode) .management-tabs button { min-height:44px; border-radius:8px; font-size:16px; }
+  body:not(.participant-mode) .calendar-layout { gap:24px; align-items:start; }
+  body:not(.participant-mode) .calendar-days { gap:5px; }
+  body:not(.participant-mode) .calendar-days button { border-radius:9px; min-height:84px; padding:10px; text-align:left; }
+  body:not(.participant-mode) .calendar-days button small { display:block; margin-top:8px; font-size:14px; }
+  body:not(.participant-mode) .calendar-entry { border-radius:10px; padding:14px; }
+  body:not(.participant-mode) .insight-heading { margin:30px 0 18px; }
+  body:not(.participant-mode) .insight-heading h2 { font-size:24px; }
+  body:not(.participant-mode) .insight-heading .eyebrow { display:none; }
+  dialog { border-radius:18px; border:1px solid var(--workspace-border); }
+  dialog::backdrop { background:#192c4659; backdrop-filter:blur(3px); }
+  /* Kiosk controls retain the larger scale needed for independent attendance. */
+  .participant-mode .compact-welcome .welcomehero { border-radius:20px; }
+  .participant-mode .kiosk-program-card { border-radius:14px; padding:16px; gap:12px; }
+  .participant-mode .kiosk-program-card strong { font-size:21px; line-height:1.5; }
+  .participant-mode .kiosk-program-card small { font-size:17px; line-height:1.6; }
+  .participant-mode .kiosk-program-card .kiosk-program-count { margin-top:6px; font-size:18px; }
+  .participant-mode .kiosk-affiliation-choice { border-radius:14px; padding:16px; }
+  .participant-mode .kiosk-room-count { font-size:18px; font-weight:700; }
+  .participant-mode .kiosk-program-status { gap:14px; }
+  .participant-mode .kiosk-program-status > div { padding:16px; border-radius:12px; }
+  .participant-mode .kiosk-program-status :is(h4,p) { font-size:18px; line-height:1.65; }
+  .participant-mode .kiosk-photo-grid .personcard { border-radius:18px; }
+  body:not(.high-contrast):not(.colorblind-view):not(.vivid-view) .primary { background:var(--workspace-navy); }
+  body:not(.participant-mode):not(.high-contrast):not(.colorblind-view):not(.vivid-view) .secondary { background:#fff; color:#354f70; border-color:#cdd8e6; box-shadow:none; }
+  body:not(.high-contrast):not(.colorblind-view):not(.vivid-view) .kiosk-program-card.selected { background:#edf3ff; border-color:#345591; }
+  :is(button,a,input,select,textarea):focus-visible { outline-offset:3px; }
+}
+@media screen and (min-width:1101px) {
+  body:not(.participant-mode) aside { width:232px; padding:24px 16px; }
+  body:not(.participant-mode) .shell { margin-left:232px; }
+}
+@media screen and (max-width:760px) {
+  body:not(.participant-mode) main { padding:20px 16px 36px; }
+  body:not(.participant-mode) header { padding:12px 16px; }
+  body:not(.participant-mode) .intro { align-items:flex-start; margin-bottom:20px; }
+  body:not(.participant-mode) .intro h1 { font-size:27px; }
+  body:not(.participant-mode) .panel { padding:18px 16px; border-radius:14px; }
+  body:not(.participant-mode) .admin-table :is(th,td) { padding:12px; }
+  body:not(.participant-mode) .calendar-days button { padding:7px 4px; min-height:76px; }
+  body:not(.participant-mode) .calendar-days button small { font-size:13px; }
+  .participant-mode .kiosk-program-card { padding:14px; }
+  .participant-mode .kiosk-program-status :is(h4,p) { font-size:17px; }
+}
