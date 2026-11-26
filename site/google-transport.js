@@ -19,6 +19,10 @@
    function onReady(event){if(event.data?.type!=='ch-google-ready'||event.data.channel!==channel||!allowedGoogleOrigin(event.origin)||!event.source)return;peer=event.source;peerOrigin=event.origin;clearTimeout(timeout);window.removeEventListener('message',onReady);resolve()}
    window.addEventListener('message',onReady);
    url.search=new URLSearchParams({mode:'bridge',origin:location.origin,channel}).toString();frame=document.createElement('iframe');frame.title='Google 공동 저장 연결';frame.hidden=true;frame.src=url.href;document.body.append(frame);
+  }).catch(error=>{
+   // A failed handshake must not leave every later retry attached to a rejected promise.
+   readyPromise=null;peer=null;peerOrigin='';frame?.remove?.();frame=null;
+   throw error;
   });return readyPromise;
  }
  window.addEventListener('message',event=>{

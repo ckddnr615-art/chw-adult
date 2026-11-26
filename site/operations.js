@@ -23,12 +23,22 @@ async function teamRequest(path,input){
   return result;
 }
 async function loadTeamMonth(month=date.slice(0,7),full=false){
+ const pending=loadTeamMonth.pending||(loadTeamMonth.pending=new Map()),existing=pending.get(month);
+ if(existing){
+  if(!full||existing.full)return existing.promise;
+  await existing.promise.catch(()=>{});
+  return loadTeamMonth(month,true);
+ }
+ const entry={full,promise:readTeamMonth(month,full)};pending.set(month,entry);
+ try{return await entry.promise}finally{if(pending.get(month)===entry)pending.delete(month)}
+}
+async function readTeamMonth(month,full){
   await ensureHolidayYear(month.slice(0,4)).catch(()=>{});
   const since=full?0:monthRevisions.get(month)||0,response=await fetch(`/api/team/state?month=${month}&since=${since}`,{credentials:'same-origin'});if(!response.ok)throw Error('공유 자료를 읽지 못했습니다.');const data=await response.json();if(!data.initialized)return false;
   if(data.revision<Math.max(latestAttendanceRevision,...monthRevisions.values()))return true;
   if(data.programCheckins){kioskProgramCheckins=data.programCheckins;kioskProgramSnapshotRevision=data.revision}
   if(!data.unchanged){applyingTeam=true;try{if(data.config&&!configPending&&!configSaving){for(const type of CONFIG_TYPES)management.data[type]=data.config[type]||[];management.data.timetableVersion=1;configBaseline=currentConfig();management.upgradeTimetable()}Object.assign(records,data.records);Object.assign(management.data.days,data.days);for(const entry of data.entries||[]){const index=management.data.entries.findIndex(e=>e.id===entry.id);if(index<0)management.data.entries.push(entry);else management.data.entries[index]=entry}if(adminSession||team.authenticated)management.data.audit=(data.audit||[]).slice().sort((a,b)=>a.time.localeCompare(b.time));originalPersist();refreshCollections();lastScheduleJSON=JSON.stringify([management.data.schedules,management.data.scheduleOverrides,management.data.closures,management.data.programs.map(p=>[p.id,p.enabledHistory||[]])])}finally{applyingTeam=false}}
-  if(!configPending&&!configSaving)monthRevisions.set(month,data.revision);team.active=true;team.initialized=true;return true;
+  if(!configPending&&!configSaving)monthRevisions.set(month,data.revision);team.active=true;team.initialized=true;team.lastCheckedAt=Date.now();return true;
 }
 function configChanges(snapshot){const changes=[];for(const type of CONFIG_TYPES){const before=new Map((configBaseline?.[type]||[]).map(x=>[x.id,x]));for(const after of snapshot[type])if(JSON.stringify(before.get(after.id)||null)!==JSON.stringify(after))changes.push({type,id:after.id,before:before.get(after.id)||null,after})}return changes}
 function memberEditFields(member){
@@ -75,9 +85,27 @@ async function saveTeamConfig(){
   if(configSaving)return new Promise(resolve=>configSaveWaiters.push(resolve));
   if(!configPending||!team.active||!team.authenticated||team.error)return;
   configSaving=true;team.saving=true;showTeamStatus();
-  try{while(configPending){configPending=false;const snapshot=currentConfig(),changes=configChanges(snapshot);if(changes.length){const result=await teamRequest('config',{changes});configBaseline=snapshot;if(result.reconcile){for(let n=0;n<10;n++){const next=await teamRequest('maintenance',{});if(!next.remaining)break}await loadTeamMonth(date.slice(0,7))}}team.error=''}}
+  try{while(configPending){configPending=false;const snapshot=currentConfig(),changes=configChanges(snapshot);if(changes.length){const result=await teamRequest('config',{changes});configBaseline=snapshot;if(result.reconcile)scheduleSharedMaintenance()}team.error=''}}
   catch(error){team.error=error.message;configConflict=error.conflict?.type?error.conflict:null;configRetryable=!!error.retryable;configPending=true}
   finally{team.saving=false;configSaving=false;for(const resolve of configSaveWaiters.splice(0))resolve();showTeamStatus()}
+}
+function scheduleSharedMaintenance(delay=1500){
+ team.reportsPending=true;clearTimeout(scheduleSharedMaintenance.timer);
+ scheduleSharedMaintenance.timer=setTimeout(runSharedMaintenance,delay);
+}
+async function runSharedMaintenance(){
+ if(runSharedMaintenance.busy)return;
+ if(!team.authenticated)return;
+ if(configPending||configSaving||document.hidden){scheduleSharedMaintenance(30000);return}
+ runSharedMaintenance.busy=true;
+ try{
+  const result=await teamRequest('maintenance',{});
+  team.reportsPending=!!(result.remaining||result.remainingReports);team.reportError='';
+  if(team.reportsPending)scheduleSharedMaintenance(30000);
+ }catch(error){
+  team.reportError='저장 완료 · 실적 반영은 재확인 중입니다.';
+  if(error.status!==401)scheduleSharedMaintenance(30000);
+ }finally{runSharedMaintenance.busy=false;showTeamStatus()}
 }
 persist=function(){
   // A date-specific schedule re-evaluates existing arrival-linked achievements for that date.
@@ -108,7 +136,14 @@ function applyAttendanceReceipt(memberId,day,value,revision,participation){
     dayRecord.participation=participation;
   }
 }
-async function commitAttendance(memberId,d,value,publicCheckin=false,participation,schedule){if(!team.active)throw Error('Google 공동 저장 연결 후 출석할 수 있습니다.');
+async function commitAttendance(memberId,d,value,publicCheckin=false,participation,schedule){
+ const pending=commitAttendance.pending||(commitAttendance.pending=new Map());
+ const key=JSON.stringify([memberId,d,value,publicCheckin,participation||'',schedule?.id||'',schedule?.program.id||'']);
+ if(pending.has(key))return pending.get(key);
+ const request=writeAttendance(memberId,d,value,publicCheckin,participation,schedule);pending.set(key,request);
+ try{return await request}finally{if(pending.get(key)===request)pending.delete(key)}
+}
+async function writeAttendance(memberId,d,value,publicCheckin=false,participation,schedule){if(!team.active)throw Error('Google 공동 저장 연결 후 출석할 수 있습니다.');
   if(schedule&&!team.programCheckin)throw Error('프로그램 출석을 사용하려면 서버를 먼저 업데이트해 주세요.');
   if(participation&&!team.participationPeriods)throw Error('오전·오후 출석을 사용하려면 관리자에게 서버 업데이트를 요청해 주세요.');
   if(!publicCheckin)await ensureHolidayYear(d.slice(0,4));
@@ -166,8 +201,9 @@ function openConfigConflict(){
 function showTeamStatus(){
   syncSharedRefreshControl();
   document.querySelector('#teamStatus')?.remove();if(!$('#main'))return;
-  const text=team.loading?'Google 공동 저장 확인 중…':team.error?'저장 확인 필요 · '+team.error:team.saving?'공유 서버에 저장 중…':team.active?`Google 공동 저장 연결됨 · 프로그램 실적 ${team.googleConfigured?'자동 전송 설정됨':'프로그램 담당 직원 지정 대기'}`:team.configured?'공유 저장소가 비어 있습니다. 관리자 로그인 후 현재 자료로 시작해 주세요.':'브라우저 저장 모드 · 다른 기기 공유는 배포 서버 연결 후 가능합니다.';
+  const text=team.loading?'Google 공동 저장 확인 중…':team.error?'저장 확인 필요 · '+team.error:team.saving?'공유 서버에 저장 중…':team.refreshError?team.refreshError:team.active?`Google 공동 저장 연결됨 · 프로그램 실적 ${team.googleConfigured?'자동 전송 설정됨':'프로그램 담당 직원 지정 대기'}`:team.configured?'공유 저장소가 비어 있습니다. 관리자 로그인 후 현재 자료로 시작해 주세요.':'브라우저 저장 모드 · 다른 기기 공유는 배포 서버 연결 후 가능합니다.';
   const node=document.createElement('section');node.id='teamStatus';node.className='team-status'+(team.error?' error':'');node.setAttribute('role','status');node.innerHTML=`<span>${esc(text)}</span>${team.configured&&!team.initialized&&adminSession?'<button class="secondary" id="initializeTeam">현재 자료로 공유 저장소 시작</button>':''}${team.error?'<button class="secondary" id="reloadTeam">서버 자료 다시 불러오기</button>':''}`;$('#main').prepend(node);
+  if(team.reportError||team.reportsPending){const report=document.createElement('small');report.textContent=team.reportError||'운영 정보 저장 완료 · 관련 실적은 순서대로 반영 중입니다.';node.append(report)}
   if(configConflict&&team.error){
     node.insertAdjacentHTML('beforeend','<button class="secondary" id="compareTeamConfig">저장 내용 비교</button>');
     $('#compareTeamConfig').onclick=openConfigConflict;
@@ -323,7 +359,7 @@ function syncSharedRefreshControl(){
  let button=$('#refreshSharedChanges');
  if(!adminSession||document.body.classList.contains('participant-mode')){button?.remove();return}
  if(!button){button=document.createElement('button');button.id='refreshSharedChanges';button.type='button';button.className='secondary';button.onclick=refreshSharedChanges;header.prepend(button)}
- button.disabled=sharedRefreshBusy||team.loading;button.textContent=sharedRefreshBusy?'최신화 중…':'↻ 변경 최신화';button.title='다른 직원이 저장한 최신 일정·출결·운영 정보를 불러옵니다.';
+ button.disabled=sharedRefreshBusy||team.loading;button.textContent=sharedRefreshBusy?'최신화 중…':'↻ 변경 최신화';button.title='다른 직원이 저장한 최신 일정·출결·운영 정보를 불러옵니다.'+(team.lastCheckedAt?' 마지막 확인 '+new Intl.DateTimeFormat('ko-KR',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false,timeZone:'Asia/Seoul'}).format(new Date(team.lastCheckedAt)):'');
 }
 async function refreshSharedChanges(){
  if(sharedRefreshBusy)return;
@@ -354,5 +390,17 @@ function sharedScreenCanRefresh(){
  if(calendar&&(calendar.dataset.editing||[...calendar.querySelectorAll('input,textarea')].some(input=>input.value.trim())))return false;
  return true;
 }
-setInterval(async()=>{if(!team.active||document.hidden||configPending||configSaving||location.hash==='#appearance')return;try{await loadTeamMonth(location.hash==='#reports'?reportMonth:date.slice(0,7));if(sharedScreenCanRefresh())render()}catch{team.error='공유 자료 확인 실패 · 기기의 현재 자료는 유지됩니다.';showTeamStatus()}},60000);
-document.addEventListener('visibilitychange',()=>{if(!document.hidden&&team.active&&!configPending&&!configSaving&&location.hash!=='#appearance')void loadTeamMonth().then(()=>{if(sharedScreenCanRefresh())render()}).catch(()=>{})});
+async function refreshSharedInBackground(){
+ if(refreshSharedInBackground.busy||!team.active||document.hidden||configPending||configSaving||location.hash==='#appearance'||sharedRefreshBlocked())return;
+ refreshSharedInBackground.busy=true;
+ const month=location.hash==='#reports'?reportMonth:location.hash==='#attendance'?selectedDate.slice(0,7):date.slice(0,7),before=monthRevisions.get(month),hadRefreshError=!!team.refreshError;
+ try{
+  await loadTeamMonth(month);team.refreshError='';
+  if(before!==monthRevisions.get(month)&&!sharedRefreshBlocked())render();
+  else if(hadRefreshError)showTeamStatus();
+  else syncSharedRefreshControl();
+ }catch{team.refreshError='최신 자료 확인이 지연되고 있습니다. 현재 자료는 유지되며 다음에 다시 확인합니다.';showTeamStatus()}
+ finally{refreshSharedInBackground.busy=false}
+}
+setInterval(async()=>{await refreshSharedInBackground()},30000+Math.floor(Math.random()*5000));
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)void refreshSharedInBackground()});

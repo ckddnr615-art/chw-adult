@@ -573,3 +573,34 @@ test('사례관리 일괄 저장은 한 인원만 동시 변경돼도 다른 선
  const state=e.call('/api/team/state',{},'GET').body,next=new e.context.ManagementStore({...state.config,days:{},entries:[]});assert.equal(next.caseManagerAt('person-1','2026-10-29'),first.id);assert.equal(next.caseManagerAt(person.id,'2026-10-29'),second.id);
  assert.equal(e.call('/api/team/case-managers',{members:[{memberId:'person-1',beforeStaffId:first.id}],staffId:'없는직원'}).status,400);
 });
+
+test('변경 없는 최신 조회는 설정 및 월별 압축 자료를 다시 읽지 않는다',()=>{
+ const e=environment();e.login();e.call('/api/team/initialize',{management:e.model().data,records:{}});
+ const state=e.call('/api/team/state?month=2026-10',{},'GET').body;
+ let configReads=0,monthReads=0;const originalConfig=e.context.sharedConfig_,originalMonth=e.context.sharedMonth_;
+ e.context.sharedConfig_=function(...args){configReads++;return originalConfig(...args)};
+ e.context.sharedMonth_=function(...args){monthReads++;return originalMonth(...args)};
+ for(let i=0;i<10;i++){const r=e.call('/api/team/state?month=2026-10&since='+state.revision,{},'GET');assert.equal(r.status,200);assert.equal(r.body.unchanged,true)}
+ assert.equal(configReads,0);assert.equal(monthReads,0);
+ const full=e.call('/api/team/state?month=2026-10&since=0',{},'GET');assert.equal(full.status,200);assert.equal(configReads,1);assert.equal(monthReads,1);
+ assert.equal(e.call('/api/team/state?month=invalid&since='+state.revision,{},'GET').status,500);
+});
+
+test('70명 출석과 10명 직원의 일정 저장이 교차해도 기록과 실적 대기열이 유지된다',()=>{
+ const e=environment(),Store=e.context.ManagementStore;
+ const people=Array.from({length:70},(_,i)=>({id:'load-person-'+i,name:'검증 인원 '+i,group:'검증 소속'}));
+ const model=new Store(Store.seed(['검증 소속'],people,[['10:00','11:30','검증 프로그램','검증 소속','검증실','직원1']],{}));
+ for(let i=2;i<=10;i++)model.save('staff','',{name:'직원'+i},'2026-10-29');
+ e.context.ScriptApp={getProjectTriggers:()=>[{getHandlerFunction:()=> 'flushSharedReportQueue_'}]};
+ e.login();assert.equal(e.call('/api/team/initialize',{management:model.data,records:{}}).status,200);
+ const commands=[];
+ for(let i=0;i<70;i++){
+  const command={memberId:people[i].id,date:'2026-10-29',scheduleId:'schedule-1',programId:'program-1',requestId:crypto.randomUUID(),deferReports:true};commands.push(command);
+  assert.equal(e.call('/api/team/checkin',command).status,200);
+  if(i%7===0){const note={id:'load-note-'+i,date:'2026-10-29',text:'직원 일정 '+i,active:true};assert.equal(e.call('/api/team/config',{changes:[{type:'calendarNotes',id:note.id,before:null,after:note}]}).status,200)}
+ }
+ for(const command of commands.slice(0,10))assert.equal(e.call('/api/team/checkin',command).body.replayed,true);
+ const state=e.call('/api/team/state?month=2026-10',{},'GET').body;
+ assert.equal(Object.values(state.records).filter(s=>s==='출석').length,70);assert.equal(state.entries.filter(e=>e.checked).length,70);assert.equal(state.config.staff.length,10);assert.equal(state.config.calendarNotes.length,10);
+ const maintenance=e.call('/api/team/maintenance');assert.equal(maintenance.status,200);assert.equal(maintenance.body.remaining,0);assert.equal(maintenance.body.remainingReports,58);
+});

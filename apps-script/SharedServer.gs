@@ -212,7 +212,14 @@ function sharedRpc(request,origin,channel){
  }
  mark('lockMs');
  try{
-  var book=sharedBook_(),manifest=sharedManifest_(book),config=sharedConfig_(book,manifest),today=sharedToday_(),input=request.input||{};
+  var book=sharedBook_(),manifest=sharedManifest_(book),today=sharedToday_(),input=request.input||{};
+  // Under the same lock, an unchanged snapshot needs neither config nor monthly JSON reads.
+  if(path==='/api/team/state'&&manifest.initialized){
+   var requestedMonth=admin?(params.month||today.slice(0,7)):today.slice(0,7);
+   if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(requestedMonth))throw Error('조회 월 오류');
+   if(Number(params.since||0)===manifest.revision)return sharedReply_({initialized:true,unchanged:true,revision:manifest.revision});
+  }
+  var config=sharedConfig_(book,manifest);
   mark('configReadMs');
   var staff=staffId&&config?(config.staff||[]).find(function(person){return person.id===staffId&&person.active!==false}):null;
   if(staffId&&!staff)admin=false;
@@ -380,15 +387,16 @@ function sharedRpc(request,origin,channel){
    sharedCommit_(book,manifest);return sharedReply_({ok:true,reconcile:remaining>0});
   }
   if(path==='/api/team/maintenance'||path==='/api/team/sync'){
-   var budget=3,reportBudget=24,deadline=Date.now()+12000,remaining=0,anyChanged=false;
+   var budget=3,reportBudget=12,deadline=Date.now()+4000,remaining=0,remainingReports=0,anyChanged=false;
    Object.keys(manifest.months).reverse().forEach(function(key){
     var month=sharedMonth_(book,manifest,key),changed=false;
     if(budget>0&&Date.now()<deadline){var done=sharedReconcile_(config,month,budget);budget-=done;changed=done>0}
     if(reportBudget>0){var flushed=sharedFlushMonth_(month,reportBudget,deadline);reportBudget-=flushed;if(flushed)changed=true}
     remaining+=month.reconcile.length;
+    remainingReports+=Object.keys(month.reports).filter(function(id){return month.reports[id].sync!=='synced'}).length;
     if(changed){sharedSaveMonth_(book,manifest,key,month);anyChanged=true}
    });
-   if(anyChanged)sharedCommit_(book,manifest);return sharedReply_({ok:true,remaining});
+   if(anyChanged)sharedCommit_(book,manifest);return sharedReply_({ok:true,remaining,remainingReports});
   }
   return sharedReply_({error:'지원하지 않는 API 경로'},404);
  }catch(error){return sharedReply_({error:error.message||'Google 저장 오류'},error.conflict?409:500)}finally{

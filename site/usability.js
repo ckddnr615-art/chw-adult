@@ -93,7 +93,7 @@ function openPublicCheckin(id,requestedSchedule,communityId=''){
  if(!confirm)return;
  confirm.onclick=async()=>{
   if(status(member)==='결석'){showAbsenceNotice();return}
-  replaceKioskDialog('<span class="saving-spinner" aria-hidden="true"></span><h2>출석을 기록하고 있어요</h2>');
+  replaceKioskDialog('<div role="status" aria-live="polite"><span class="saving-spinner" aria-hidden="true"></span><h2>출석을 기록하고 있어요</h2><p>'+esc(member.name)+' 님 · '+esc(schedule.program.name)+'</p><p>잠시 기다려 주세요. 여러 번 누르지 않아도 돼요.</p></div>');
   const spinner=$('#dialogcontent .saving-spinner'),dialog=$('#dialog');
   const isCurrent=()=>dialog.open&&dialog.contains(spinner);
   try{
