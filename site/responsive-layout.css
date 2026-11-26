@@ -1,0 +1,68 @@
+/* Screen-only: printed registers keep their full monthly layout. */
+@media screen{
+ .compact-display-settings{position:relative;min-width:0}
+ .compact-display-settings>summary{display:none}
+ .compact-display-options{display:flex;flex-wrap:wrap;gap:8px}
+ .compact-display-options .accessbutton{display:inline-flex;align-items:center}
+ .mobile-menu-backdrop[hidden]{display:none}
+ .mobile-menu-backdrop{position:fixed;inset:0;z-index:19;background:#192c4670;border:0;border-radius:0;width:100%;height:100%;padding:0}
+ .register-view-tools{display:flex;align-items:end;flex-wrap:wrap;gap:12px;margin:16px 0}
+ .register-view-tools label{display:grid;gap:6px;font-size:16px}
+ .register-view-tools p{flex:1 1 250px;font-size:14px;color:#53657b;line-height:1.7;margin:0}
+}
+@media screen and (max-width:1100px){
+ body:not(.participant-mode) #sidebar{transform:translateX(-110%);width:min(290px,85vw);z-index:20;box-shadow:12px 0 45px #192c4633;transition:transform .15s}
+ body:not(.participant-mode) #sidebar.open{transform:translateX(0)}
+ body:not(.participant-mode) .shell{margin-left:0}
+ body:not(.participant-mode) #menu{display:inline-flex;align-items:center;justify-content:center;min-width:48px;min-height:48px}
+}
+@media screen and (max-width:760px){
+ .compact-display-settings>summary{display:flex;align-items:center;min-height:48px;padding:10px 14px;border:1px solid #cdd8e6;border-radius:9px;background:#fff;color:#354f70;font-size:16px;cursor:pointer}
+ .compact-display-settings:not([open]) .compact-display-options{display:none}
+ .compact-display-settings[open] .compact-display-options{position:absolute;top:calc(100% + 6px);left:0;z-index:30;min-width:200px;display:grid;padding:10px;background:#fff;border:1px solid #ccd7e5;border-radius:12px;box-shadow:0 10px 28px #192c4626}
+ .compact-display-settings .compact-display-options .accessbutton{display:block!important;width:100%;font-size:16px;min-height:48px}
+ body:not(.participant-mode) .headeractions{gap:8px}
+ body:not(.participant-mode) .tablewrap:has(>.mobile-card-table){overflow:visible;contain:none}
+ body:not(.participant-mode) table.mobile-card-table{display:block;width:100%;min-width:0!important;max-width:100%;border:0;table-layout:auto}
+ .mobile-card-table>thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+ .mobile-card-table>tbody{display:grid;gap:14px}
+ .mobile-card-table>tbody>tr{display:grid;grid-template-columns:minmax(0,1fr);border:1px solid #ccd7e5;border-radius:12px;padding:12px;background:#fff;min-width:0}
+ .mobile-card-table>tbody>tr:not([data-mobile-context=""])::before{content:attr(data-mobile-context);font-size:18px;font-weight:700;padding:5px 0 12px;overflow-wrap:anywhere}
+ body:not(.participant-mode) .mobile-card-table>tbody>tr>:is(th,td){display:block;width:auto!important;min-width:0!important;max-width:100%;padding:10px 0;border:0;border-bottom:1px solid #e6ebf2;white-space:normal;background:transparent!important;text-align:left}
+ .mobile-card-table>tbody>tr>:last-child{border-bottom:0!important}
+ .mobile-card-table>tbody>tr:has(.member-select-cell){grid-template-columns:44px minmax(0,1fr)}
+ .mobile-card-table>tbody>tr:has(.member-select-cell)>td{grid-column:1/-1}
+ .mobile-card-table>tbody>tr:has(.member-select-cell)>.member-select-cell{grid-column:1;grid-row:1;display:flex!important;align-items:center}
+ .mobile-card-table>tbody>tr:has(.member-select-cell)>.member-name-cell{grid-column:2;grid-row:1}
+ .mobile-card-table .member-select-cell::before{display:none!important}
+ .mobile-card-table>tbody>tr>:is(th,td)::before{content:attr(data-mobile-label);display:block;color:#53657b;font-size:14px;font-weight:700;margin-bottom:6px}
+ .mobile-card-table :is(select,input:not([type=checkbox]),.program-staff-quick){width:100%!important;max-width:100%!important;min-width:0!important}
+ .mobile-card-table :is(.rowactions,.schedule-row-actions,.catalog-row-actions){min-width:0!important;max-width:100%;white-space:normal;gap:8px}
+ .mobile-card-table :is(button,.textbutton){min-height:48px}
+ .register-view-tools{align-items:stretch;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+ .register-view-tools :is(input,select){width:100%;min-width:0;min-height:48px;font-size:16px}
+ .register-view-tools p{grid-column:1/-1}
+ .monthly-grid .daycell{min-height:48px}
+}
+@media screen and (max-width:620px){
+ .kiosk-photo-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+ .participant-mode .kiosk-photo-grid .personcard{padding:14px 8px;min-height:0}
+ .participant-mode .kiosk-photo-grid .personcard :is(.portrait,.avatar){width:min(100%,132px);height:auto;aspect-ratio:1;margin-bottom:10px}
+ .participant-mode .kiosk-photo-grid .personcard b{font-size:22px;line-height:1.5;overflow-wrap:anywhere}
+ .kiosk-photo-option>[data-kiosk-read]{min-width:48px;min-height:48px}
+ .participant-mode .kiosk-photo-pages button{min-height:48px}
+ .participant-mode .compact-welcome .welcomehero{padding:18px;gap:12px}
+ .participant-mode .compact-welcome .welcomehero h1{font-size:28px}
+ .participant-mode .compact-welcome .welcomehero .eyebrow{display:none}
+}
+
+@media screen and (max-width:1100px){
+ body:not(.participant-mode) dialog[open],body.participant-mode dialog[open]{display:flex;flex-direction:column;width:calc(100% - 20px);max-width:calc(100% - 20px);max-height:calc(var(--visible-window-height,100dvh) - 24px);padding:18px 16px;overflow:hidden;box-sizing:border-box;position:fixed;top:calc(var(--visible-window-top,0px) + 12px);bottom:auto;margin:0 auto}
+ dialog[open] #dialogcontent{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;scroll-padding-bottom:85px;overscroll-behavior:contain}
+ dialog[open] #closeDialog{flex:0 0 auto;position:static;width:100%;min-height:48px;margin:12px 0 0}
+ dialog .entityform{min-width:0}
+ dialog :is(input,select,textarea){max-width:100%;font-size:16px;scroll-margin:20px}
+ dialog .entityform>button[type=submit],dialog .program-save-actions,dialog #assignmentForm>.primary{position:sticky;bottom:0;z-index:3;min-height:48px;box-shadow:0 -8px 12px #ffffffed}
+ dialog .program-save-actions{background:#fff;display:grid;grid-template-columns:1fr}
+ dialog .program-save-actions button{min-width:0}
+}

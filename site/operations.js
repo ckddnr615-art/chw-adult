@@ -194,7 +194,7 @@ function openConfigConflict(){
   if(!draft||!current||!original){toast('현재 자료를 백업한 뒤 서버 자료를 확인해 주세요.');return}
   const fields=[...new Set([...Object.keys(original),...Object.keys(draft)])].filter(key=>
     key!=='id'&&JSON.stringify(draft[key])!==JSON.stringify(original[key]));
-  const labels={name:'이름',start:'시작 시간',end:'종료 시간',location:'장소',facilitatorIds:'진행 직원',weekdays:'요일',reason:'변경 이유'};
+  const labels={name:'이름',selectionHidden:'목록에서 제외',start:'시작 시간',end:'종료 시간',location:'장소',facilitatorIds:'진행 직원',weekdays:'요일',reason:'변경 이유'};
   const value=(key,item)=>key==='facilitatorIds'&&Array.isArray(item)?management.staffNames(item):typeof item==='string'?item:JSON.stringify(item)??'—';
   const rows=fields.map((key,i)=>'<tr><td><input type="checkbox" name="field" value="'+i+'" aria-label="'+esc(labels[key]||key)+' 적용" '+(JSON.stringify(original[key])===JSON.stringify(current[key])?'checked':'')+'></td><td>'+esc(labels[key]||key)+'</td><td>'+esc(value(key,current[key]))+'</td><td>'+esc(value(key,draft[key]))+'</td></tr>').join('');
   modal('<h2>저장 내용 비교</h2><p>적용할 항목을 선택해 주세요.</p><form id="compareConfig" class="entityform"><div class="tablewrap"><table class="admin-table"><thead><tr><th>적용</th><th>항목</th><th>먼저 저장된 내용</th><th>내 입력</th></tr></thead><tbody>'+rows+'</tbody></table></div><button type="submit" class="primary">선택한 수정 적용</button></form>');

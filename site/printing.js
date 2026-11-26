@@ -35,9 +35,10 @@ function printCurrentDocument(button){
  if(!source||!source.querySelector('table')){toast('인쇄할 표가 없습니다.');return}
  if(source.querySelector('#monthTable')&&!source.querySelector('.monthly-grid')){toast('공휴일 자료 확인 후 인쇄해 주세요.');return}
  const copy=source.cloneNode(true),labels=[],weekly=!!source.querySelector('.weekly-timetable'),staffPage=weekly&&!!source.querySelector('#timetableStaff');
- source.querySelectorAll('label').forEach(label=>{const control=label.querySelector('select,input[type="date"],input[type="month"]');if(!control||(weekly&&control.type==='date'))return;const name=label.firstChild?.textContent.trim()||'';const value=control.tagName==='SELECT'?control.selectedOptions[0]?.textContent:control.value;if(value)labels.push(name+' · '+value)});
+ if(copy.querySelector('.monthly-grid'))copy.querySelector('#monthTable').innerHTML=monthTable(reportMonth,'month');
+ source.querySelectorAll('label').forEach(label=>{const control=label.querySelector('select,input[type="date"],input[type="month"]');if(!control||label.closest('.register-view-tools')||(weekly&&control.type==='date'))return;const name=label.firstChild?.textContent.trim()||'';const value=control.tagName==='SELECT'?control.selectedOptions[0]?.textContent:control.value;if(value)labels.push(name+' · '+value)});
  if(weekly)prepareWeeklyPrint(copy);
- copy.querySelectorAll('.filters,.weektoolbar,.staff-schedule-filter,.timetable-help,.add-slot,.notice,.schedule-warning button,[data-reset-override]').forEach(el=>el.remove());
+ copy.querySelectorAll('.filters,.register-view-tools,.weektoolbar,.staff-schedule-filter,.timetable-help,.add-slot,.notice,.schedule-warning button,[data-reset-override]').forEach(el=>el.remove());
  copy.querySelectorAll('button').forEach(el=>{const replacement=document.createElement(el.matches('.timetable-card')?'div':'span');replacement.className=el.className;replacement.innerHTML=el.innerHTML;el.replaceWith(replacement)});
  copy.querySelectorAll('[id]').forEach(el=>el.removeAttribute('id'));
  const title=source.querySelector('.personal-caption h2')?.textContent|| (source.querySelector('.monthly-grid')?'사례관리 담당자별 월별 출석부':document.querySelector('#timetableStaff')?'직원별 주간 시간표':'주간 시간표');
