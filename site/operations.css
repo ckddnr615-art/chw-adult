@@ -177,3 +177,6 @@ body.participant-mode{background:#fff}
 .calendar-note-form h4{margin:0;font-size:16px}
 .calendar-note-form input{width:100%;box-sizing:border-box;min-height:42px}
 .calendar-days .calendar-entry-count{display:block;margin-top:4px;font-size:10px;color:#345591}
+
+/* Do not expose the previous day under newly selected date controls. */
+@media screen{#main[data-attendance-date-loading] :is(#rows,.program-attendance-group,.ledger-panel){visibility:hidden}#main[data-attendance-date-loading] #programAttendanceFeedback{font-size:17px;font-weight:700;color:#345591}}

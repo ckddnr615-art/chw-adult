@@ -77,7 +77,7 @@ function showStaffDesk(){
       ${id?`<h3>담당 참여자 · ${members.length}명</h3><p>${members.map(member=>esc(member.name)+' ('+esc(records[date+':'+member.id]||'미입력')+')').join(' · ')||'담당 참여자가 없습니다.'}</p>`:''}</div>`:''}
   </section>`);
   if($('#deskStaff'))$('#deskStaff').onchange=event=>{deskStaff=event.target.value;render();$('#deskStaff')?.focus()};
-  $('#deskProgramAttendance').onclick=()=>{programAttendanceStaff='';programAttendanceDate=date};
+  $('#deskProgramAttendance').onclick=()=>{programAttendanceStaff='';programAttendanceDate=date;selectedDate=date};
 }
 
 function programAttendancePanel(){
@@ -146,21 +146,8 @@ function bindProgramAttendance(){
     else openProgramGroups.delete(group.dataset.programGroup);
   });
   $('#programAttendanceStaff').onchange=event=>{programAttendanceStaff=event.target.value;render()};
-  async function refresh(day){
-    const feedback=$('#programAttendanceFeedback');
-    feedback.textContent='기록을 확인하고 있습니다.';
-    try{
-      if(team.active&&!await loadTeamMonth(day.slice(0,7),true))throw Error('공유 자료를 읽지 못했습니다.');
-      programAttendanceDate=day;
-      render();
-    }catch(error){feedback.textContent=error.message}
-  }
-  $('#programAttendanceDate').onchange=event=>{
-    const day=event.target.value;
-    if(day&&day<=date)void refresh(day);
-    else event.target.value=programAttendanceDate||date;
-  };
-  $('#refreshProgramAttendance').onclick=()=>refresh(programAttendanceDate||date);
+  $('#programAttendanceDate').onchange=event=>{void changeAttendanceDate(event.target.value)};
+  $('#refreshProgramAttendance').onclick=()=>{void changeAttendanceDate(selectedDate,true)};
   panel.querySelectorAll('[data-program-attendance]').forEach(button=>button.onclick=async()=>{
     const command=JSON.parse(button.dataset.programAttendance);
     button.disabled=true;

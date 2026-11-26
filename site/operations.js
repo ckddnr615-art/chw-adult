@@ -100,7 +100,7 @@ async function saveTeamConfig(){
   if(configSaving)return new Promise(resolve=>configSaveWaiters.push(resolve));
   if(!configPending||!team.active||!team.authenticated||team.error)return;
   configSaving=true;team.saving=true;showTeamStatus();
-  try{while(configPending){configPending=false;const snapshot=currentConfig(),changes=configChanges(snapshot);if(changes.length){const result=await teamRequest('config',{changes});configBaseline=snapshot;if(result.reconcile)scheduleSharedMaintenance()}team.error=''}}
+  try{while(configPending){configPending=false;const snapshot=currentConfig(),changes=configChanges(snapshot);if(changes.length){const result=await teamRequest('config',{changes});configBaseline=snapshot;if(typeof programReportState!=='undefined'&&changes.some(change=>['programs','schedules','enrollments','scheduleOverrides','closures'].includes(change.type)))programReportState.result=null;if(result.reconcile)scheduleSharedMaintenance()}team.error=''}}
   catch(error){team.error=error.message;configConflict=error.conflict?.type?error.conflict:null;configRetryable=!!error.retryable;configPending=true}
   finally{team.saving=false;configSaving=false;for(const resolve of configSaveWaiters.splice(0))resolve();showTeamStatus()}
 }
@@ -111,7 +111,7 @@ function scheduleSharedMaintenance(delay=1500){
 async function runSharedMaintenance(){
  if(runSharedMaintenance.busy)return;
  if(!team.authenticated)return;
- if(configPending||configSaving||document.hidden){scheduleSharedMaintenance(30000);return}
+ if(configPending||configSaving||document.hidden||commitAttendance.pending?.size){scheduleSharedMaintenance(30000);return}
  runSharedMaintenance.busy=true;
  try{
   const result=await teamRequest('maintenance',{});
@@ -158,6 +158,15 @@ async function commitAttendance(memberId,d,value,publicCheckin=false,participati
  const request=writeAttendance(memberId,d,value,publicCheckin,participation,schedule);pending.set(key,request);
  try{return await request}finally{if(pending.get(key)===request)pending.delete(key)}
 }
+function applyStaffAttendanceState(result,memberId,day){
+ const state=result.attendanceState,key=day+':'+memberId,revision=result.revision;
+ if(!state||state.memberId!==memberId||state.date!==day||!Array.isArray(state.entries)||state.entries.some(e=>e.memberId!==memberId||e.date!==day))return false;
+ if(revision<Math.max(attendanceRecordRevisions.get(key)||0,...monthRevisions.values()))return true;
+ if(state.day)management.data.days[key]=state.day;else delete management.data.days[key];
+ management.data.entries=management.data.entries.filter(e=>e.memberId!==memberId||e.date!==day).concat(state.entries);
+ if(typeof programReportState!=='undefined')programReportState.result=null;
+ originalPersist();return true;
+}
 async function writeAttendance(memberId,d,value,publicCheckin=false,participation,schedule){if(!team.active)throw Error('Google 공동 저장 연결 후 출석할 수 있습니다.');
   if(schedule&&!team.programCheckin)throw Error('프로그램 출석을 사용하려면 서버를 먼저 업데이트해 주세요.');
   if(participation&&!team.participationPeriods)throw Error('오전·오후 출석을 사용하려면 관리자에게 서버 업데이트를 요청해 주세요.');
@@ -165,7 +174,7 @@ async function writeAttendance(memberId,d,value,publicCheckin=false,participatio
   if(team.active){
     const key=memberId+':'+d+':'+value+':'+(schedule?ManagementStore.programAttendanceKey(schedule.id,schedule.program.id):participation||''),requestId=attendanceRequests.get(key)||crypto.randomUUID();attendanceRequests.set(key,requestId);
     const expectedStatus=records[d+':'+memberId]||'';
-    let result;for(let n=0;n<3;n++){try{result=await teamRequest(publicCheckin?'checkin':'attendance',{memberId,date:d,status:value,requestId,expectedStatus,participation,scheduleId:schedule?.id,programId:schedule?.program.id,expectedParticipation:attendancePeriod(memberId,d),deferReports:publicCheckin});break}catch(error){
+    let result;for(let n=0;n<3;n++){try{result=await teamRequest(publicCheckin?'checkin':'attendance',{memberId,date:d,status:value,requestId,expectedStatus,participation,scheduleId:schedule?.id,programId:schedule?.program.id,expectedParticipation:attendancePeriod(memberId,d),deferReports:publicCheckin||team.attendanceReceipt===true,refreshPrograms:!publicCheckin&&team.attendanceReceipt===true});break}catch(error){
       if(error.currentStatus!==undefined){
         attendanceRequests.delete(key);
         applyAttendanceReceipt(memberId,error.date||d,error.currentStatus,error.revision,error.participation);
@@ -182,7 +191,10 @@ async function writeAttendance(memberId,d,value,publicCheckin=false,participatio
       if(!checked.includes(memberId))checked.push(memberId);
     }
     if(publicCheckin)return result;
-    try{await loadTeamMonth(d.slice(0,7))}catch{team.error='출결 저장 완료 · 최신 자료를 다시 확인해 주세요.'}
+    if(!applyStaffAttendanceState(result,memberId,result.date||d)){
+     try{await loadTeamMonth(d.slice(0,7))}catch{team.refreshError='출결 저장 완료 · 최신 자료를 다시 확인해 주세요.'}
+    }
+    if(result.reportReceipt?.pending)scheduleSharedMaintenance(5000);
     render();return result;
   }
   let result;if(!transaction(()=>{result=management.applyAttendance(records,memberId,d,value)}))throw Error('기기 저장에 실패했습니다.');render();return result;
@@ -244,7 +256,7 @@ function patchPhotos(){
   for(const row of document.querySelectorAll('tr[data-catalog-type="members"]')){const member=management.find('members',row.dataset.catalogId);if(member)(row.querySelector('.member-name-cell')||row.cells[0]).insertAdjacentHTML('afterbegin',photoMarkup(member,'small-portrait'))}
   void hydratePhotos();
 }
-render=function(){if(location.hash==='#performance')history.replaceState(null,'','#attendance');previousOperationsRender();showTeamStatus();patchPhotos();holidayNotice();if(location.hash.split('/')[0]==='#attendance'&&$('#main .panel')){$('#main .panel').insertAdjacentHTML('beforeend',automaticLedger(selectedDate));$('#main .panel').insertAdjacentHTML('beforebegin',programAttendancePanel());bindProgramAttendance();if($('#exportLinkedEntries'))$('#exportLinkedEntries').onclick=()=>exportEntries(management.data.entries.filter(e=>e.date===selectedDate),'출석연동_실적_'+selectedDate+'.csv')}};
+render=function(){if(location.hash.split('/')[0]==='#attendance')programAttendanceDate=selectedDate;if(location.hash==='#performance')history.replaceState(null,'','#attendance');previousOperationsRender();showTeamStatus();patchPhotos();holidayNotice();if(location.hash.split('/')[0]==='#attendance'&&$('#main .panel')){$('#main .panel').insertAdjacentHTML('beforeend',automaticLedger(selectedDate));$('#main .panel').insertAdjacentHTML('beforebegin',programAttendancePanel());bindProgramAttendance();if($('#exportLinkedEntries'))$('#exportLinkedEntries').onclick=()=>exportEntries(management.data.entries.filter(e=>e.date===selectedDate),'출석연동_실적_'+selectedDate+'.csv')}};
 openEditor=function(type,id=''){if(type==='closures')return openClosureEditor(id);if(type==='members')return openMemberPhotoEditor(id);return previousPhotoEditor(type,id)};
 editDay=function(key){const d=key.slice(0,10),id=key.slice(11),member=management.find('members',id);if(d>date){toast('미래 출결을 입력할 수 없습니다.');return}modal(`<h2>${esc(member.name)} · ${d}</h2><form id="linkedDayForm" class="entityform"><label>출결 상태<select name="status">${attendanceOptionMarkup(id,d)}</select></label><p class="formhint">출석 이외 상태로 바꾸면 그날 연결된 실적을 모두 취소합니다. 결석은 월별 출석부에 O로만 표시합니다.</p><p id="linkedDayError" role="alert"></p><button class="primary" type="submit">출결과 연결 실적 저장</button></form>`);$('#linkedDayForm').onsubmit=async e=>{e.preventDefault();e.submitter.disabled=true;try{const result=await saveAttendanceOption(id,d,new FormData(e.target).get('status'));$('#dialog').close();toast(staffAttendanceMessage(result))}catch(error){$('#linkedDayError').textContent=error.message;e.submitter.disabled=false}}};
 function staffAttendanceMessage(result){
@@ -252,7 +264,7 @@ function staffAttendanceMessage(result){
   if(!receipt)return '출결을 저장했습니다.';
   if(receipt.mappingMissing||receipt.failed)return '출결 저장 완료 · 실적 시트 연결 또는 전송 오류를 확인해 주세요.';
   if(receipt.pending)return '출결 저장 완료 · 실적 시트 반영 대기';
-  if(receipt.noSchedule)return '출결 저장 완료 · 배정 프로그램을 확인해 주세요.';
+  if(receipt.noSchedule)return '출결 저장 완료 · 해당 날짜의 운영 요일과 참여자 배정 적용일을 확인해 주세요.';
   return '출결과 실적 시트 반영을 확인했습니다.';
 }
 const absenceMessage='오늘 못 와요로 기록되어 있어요. 출석하려면 직원에게 알려 주세요.';
@@ -290,9 +302,38 @@ function attendanceOptionMarkup(id,day){
   const current=attendanceOption(id,day);
   return ATTENDANCE_OPTIONS.map(([value,label])=>'<option value="'+value+'" '+(value===current?'selected':'')+'>'+label+'</option>').join('');
 }
-function saveAttendanceOption(id,day,value){
+async function saveAttendanceOption(id,day,value){
+  const select=[...document.querySelectorAll('[data-status]')].find(node=>node.dataset.status===id),cell=select?.closest('tr')?.querySelector('td:last-child'),oldText=cell?.textContent;
+  if(cell)cell.textContent='저장 중…';
   const participation=['am','pm','both'].includes(value)?value:undefined;
-  return commitAttendance(id,day,participation?'출석':value,false,participation);
+  try{return await commitAttendance(id,day,participation?'출석':value,false,participation)}
+  catch(error){if(cell?.isConnected)cell.textContent=oldText;throw error}
+}
+async function changeAttendanceDate(day,force=false){
+ const previous=selectedDate,inputs=[$('#filterDate'),$('#programAttendanceDate')].filter(Boolean);
+ const valid=/^\d{4}-\d{2}-\d{2}$/.test(day)&&Number.isFinite(Date.parse(day+'T12:00:00Z'))&&new Date(day+'T12:00:00Z').toISOString().slice(0,10)===day&&day<=date;
+ if(changeAttendanceDate.busy){for(const input of inputs)input.value=changeAttendanceDate.pendingDay;return}
+ if(!valid||commitAttendance.pending?.size){
+  for(const input of inputs)input.value=previous;
+  if(commitAttendance.pending?.size)toast('출결 저장이 끝난 뒤 날짜를 바꿔 주세요.');return;
+ }
+ changeAttendanceDate.busy=true;
+ changeAttendanceDate.pendingDay=day;
+ const main=$('#main'),focusId=document.activeElement?.id;
+ for(const input of inputs){input.value=day;input.disabled=true}
+ if(main){main.dataset.attendanceDateLoading=day;main.setAttribute('aria-busy','true');main.inert=true}
+ const feedback=$('#programAttendanceFeedback');if(feedback)feedback.textContent=day+' 자료를 확인하고 있습니다.';
+ try{
+  if(team.active&&!await loadTeamMonth(day.slice(0,7),force))throw Error('해당 날짜의 공유 자료를 읽지 못했습니다.');
+  selectedDate=day;programAttendanceDate=day;render();
+ }catch(error){selectedDate=previous;programAttendanceDate=previous;render();toast(error.message)}
+ finally{
+  changeAttendanceDate.busy=false;
+  delete changeAttendanceDate.pendingDay;
+  if(main){delete main.dataset.attendanceDateLoading;main.removeAttribute('aria-busy');main.inert=false}
+  for(const id of ['#filterDate','#programAttendanceDate']){const input=$(id);if(input){input.value=selectedDate;input.disabled=false}}
+  if(focusId==='filterDate'||focusId==='programAttendanceDate')$('#'+focusId)?.focus({preventScroll:true});
+ }
 }
 bindManagement=function(page){
   previousOperationsBind(page);bindClosureManagement();if(page==='appearance')bindBannerSettings();
@@ -345,7 +386,10 @@ bindManagement=function(page){
     };
   }
   if(page==='dashboard')showStaffDesk();
-  if(page==='attendance'){document.querySelectorAll('[data-status]').forEach(select=>select.onchange=async()=>{const previous=attendanceOption(select.dataset.status,selectedDate);select.disabled=true;try{const result=await saveAttendanceOption(select.dataset.status,selectedDate,select.value);toast(staffAttendanceMessage(result))}catch(error){select.value=previous;select.disabled=false;toast(error.message)}})}
+  if(page==='attendance'){
+   if($('#filterDate'))$('#filterDate').onchange=event=>{void changeAttendanceDate(event.target.value)};
+   document.querySelectorAll('[data-attendance-recheck]').forEach(button=>button.onclick=async()=>{const id=button.dataset.attendanceRecheck,day=selectedDate;button.disabled=true;try{const result=await saveAttendanceOption(id,day,attendanceOption(id,day));toast(staffAttendanceMessage(result))}catch(error){button.disabled=false;toast(error.message)}});
+   document.querySelectorAll('[data-status]').forEach(select=>select.onchange=async()=>{const previous=attendanceOption(select.dataset.status,selectedDate);select.disabled=true;try{const result=await saveAttendanceOption(select.dataset.status,selectedDate,select.value);toast(staffAttendanceMessage(result))}catch(error){select.value=previous;select.disabled=false;toast(error.message)}})}
   if(page==='workspace'){if($('#backupTeamData'))$('#backupTeamData').onclick=downloadTeamBackup;if($('#refreshTeamData'))$('#refreshTeamData').onclick=async()=>{await loadTeamMonth(date.slice(0,7),true);render()}}
   if(page==='reports'&&$('#reportMonth')){
     const picker=$('#reportMonth'),original=picker.onchange;
@@ -367,7 +411,7 @@ managementPages.settings=function(){return heading('환경 설정','운영 환�
 managementPages.performance=attendance;
 let sharedRefreshBusy=false;
 function sharedRefreshBlocked(){
- return !sharedScreenCanRefresh()||(typeof caseBulkSelected!=='undefined'&&caseBulkSelected.size>0)||(typeof memberRowDrafts!=='undefined'&&memberRowDrafts.size>0)||(typeof programStaffDrafts!=='undefined'&&programStaffDrafts.size>0);
+ return (typeof changeAttendanceDate!=='undefined'&&changeAttendanceDate.busy)||!sharedScreenCanRefresh()||(typeof caseBulkSelected!=='undefined'&&caseBulkSelected.size>0)||(typeof memberRowDrafts!=='undefined'&&memberRowDrafts.size>0)||(typeof programStaffDrafts!=='undefined'&&programStaffDrafts.size>0);
 }
 function syncSharedRefreshControl(){
  const header=document.querySelector('.headeractions');if(!header)return;
