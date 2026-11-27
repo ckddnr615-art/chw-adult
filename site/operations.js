@@ -387,6 +387,7 @@ bindManagement=function(page){
   }
   if(page==='dashboard')showStaffDesk();
   if(page==='attendance'){
+   if($('#clearAttendanceFilters'))$('#clearAttendanceFilters').onclick=()=>{selectedGroup='전체 커뮤니티';attendanceStaffFilter='';query='';filter='전체 상태';render()};
    if($('#filterDate'))$('#filterDate').onchange=event=>{void changeAttendanceDate(event.target.value)};
    document.querySelectorAll('[data-attendance-recheck]').forEach(button=>button.onclick=async()=>{const id=button.dataset.attendanceRecheck,day=selectedDate;button.disabled=true;try{const result=await saveAttendanceOption(id,day,attendanceOption(id,day));toast(staffAttendanceMessage(result))}catch(error){button.disabled=false;toast(error.message)}});
    document.querySelectorAll('[data-status]').forEach(select=>select.onchange=async()=>{const previous=attendanceOption(select.dataset.status,selectedDate);select.disabled=true;try{const result=await saveAttendanceOption(select.dataset.status,selectedDate,select.value);toast(staffAttendanceMessage(result))}catch(error){select.value=previous;select.disabled=false;toast(error.message)}})}

@@ -231,6 +231,12 @@ const previousSessionBind=bindManagement;
 bindManagement=function(page){previousSessionBind(page);updateAdminSessionClock();bindProgramStaffQuickEditors()};
 
 const programStaffDrafts=new Map();
+function scheduleEditDate(schedule,today){
+ if(schedule.date)return schedule.date;
+ if(schedule.validFrom&&today<schedule.validFrom)return schedule.validFrom;
+ if(schedule.validTo&&today>schedule.validTo)return schedule.validTo;
+ return today;
+}
 function programStaffQuickEditor(schedule){
  if(schedule.reportAssignmentMode==='participant')return `<div class="program-staff-quick"><strong>참여자별 담당 분배</strong><p class="formhint">각 담당 직원에게 맡은 이용인의 실적만 기록합니다.</p><button class="secondary" data-assign="${esc(schedule.id)}">참여자별 담당 설정</button></div>`;
  const draft=programStaffDrafts.get(schedule.id),program=management.find('programs',schedule.programId),ids=schedule.facilitatorIds||program?.facilitatorIds||[];
@@ -239,13 +245,15 @@ function programStaffQuickEditor(schedule){
  const selected=draft?.assignments?.[day]??schedule.reportStaffByWeekday?.[day]??schedule.reportStaffId??(ids.length===1?ids[0]:'');
  const staff=management.data.staff.filter(staff=>staff.active!==false||staff.id===selected);
  return `<label>${schedule.date?'당일 담당': '일월화수목금토'[day]+'요일 담당'}<select data-quick-staff="${day}" aria-label="${esc(program?.name||'프로그램')} ${'일월화수목금토'[day]}요일 담당"><option value="">담당 직원 선택</option>${sortedOpts(staff,selected,staff=>staff.name+(staff.active===false?' (삭제)':''))}</select></label>`;
- }).join('')}<label>변경 적용일<input type="date" data-quick-from value="${esc(draft?.from||schedule.date||(schedule.validFrom&&schedule.validFrom>date?schedule.validFrom:date))}" ${schedule.date?'readonly':''} ${schedule.validFrom?'min="'+esc(schedule.validFrom)+'"':''} ${schedule.validTo?'max="'+esc(schedule.validTo)+'"':''}></label>${schedule.validFrom&&schedule.validFrom>date?`<p class="formhint">${esc(schedule.validFrom)}부터 시작하는 일정입니다. 시작일 전인 오늘은 선택할 수 없습니다.</p>`:''}<button type="button" class="primary" data-quick-staff-save ${!draft||draft.saving?'disabled':''}>${draft?.saving?'저장 중…':'담당자 저장'}</button><small data-quick-staff-error role="status">${esc(draft?.error||'')}</small></div>`;
+ }).join('')}<p class="quick-apply-summary">${esc(draft?.from||scheduleEditDate(schedule,date))}부터 적용</p><details class="simple-advanced" ${draft?.from&&draft.from!==scheduleEditDate(schedule,date)?'open':''}><summary>적용 날짜 변경</summary><label>언제부터 담당하나요?<input type="date" data-quick-from value="${esc(draft?.from||scheduleEditDate(schedule,date))}" ${schedule.date?'readonly':''} ${schedule.validFrom?'min="'+esc(schedule.validFrom)+'"':''} ${schedule.validTo?'max="'+esc(schedule.validTo)+'"':''}></label><p class="formhint">평소에는 그대로 저장하세요. 과거부터 담당했다면 날짜를 바꿔 주세요. 프로그램 운영 시작일은 바뀌지 않습니다.</p></details><button type="button" class="primary" data-quick-staff-save ${!draft||draft.saving?'disabled':''}>${draft?.saving?'저장 중…':'담당자 저장'}</button><small data-quick-staff-error role="status">${esc(draft?.error||'')}</small></div>`;
 }
 function updateScheduleStaff(store,scheduleId,assignments,from){
  const schedule=store.find('schedules',scheduleId);if(!schedule||schedule.active===false)throw Error('변경할 일정을 다시 확인해 주세요.');
  const days=schedule.date?[new Date(schedule.date+'T12:00:00Z').getUTCDay()]:schedule.weekdays;
  if(!/^\d{4}-\d{2}-\d{2}$/.test(from))throw Error('변경 적용일을 선택해 주세요.');
  const mapping={};for(const day of days){const id=assignments[day];if(!store.list('staff').some(staff=>staff.id===id))throw Error('운영 요일별 담당 직원을 선택해 주세요.');mapping[day]=id}
+ const previousIds=schedule.facilitatorIds||store.find('programs',schedule.programId)?.facilitatorIds||[];
+ if(days.every(day=>mapping[day]===(schedule.reportStaffByWeekday?.[day]||schedule.reportStaffId||(previousIds.length===1?previousIds[0]:''))))return schedule;
  const fields={facilitatorIds:[...new Set(Object.values(mapping))],reportStaffByWeekday:mapping,reportStaffId:''};
  return schedule.date?store.save('schedules',scheduleId,fields,from):store.reviseSchedule(scheduleId,fields,from);
 }
@@ -263,7 +271,7 @@ function bindProgramStaffQuickEditors(){
  document.querySelectorAll('[data-program-schedule-edit]').forEach(button=>button.onclick=()=>{const schedule=management.find('schedules',button.dataset.programScheduleEdit);if(schedule)openProgramRegistration(schedule.programId,schedule.id)});
  document.querySelectorAll('[data-quick-schedule]').forEach(box=>{
  const id=box.dataset.quickSchedule,button=box.querySelector('[data-quick-staff-save]'),feedback=box.querySelector('[data-quick-staff-error]');
- const capture=()=>{const pending=programStaffDrafts.get(id);if(pending?.applied){feedback.textContent='앞선 변경을 서버에 저장한 뒤 다시 수정해 주세요.';return pending}const draft={assignments:Object.fromEntries([...box.querySelectorAll('[data-quick-staff]')].map(input=>[input.dataset.quickStaff,input.value])),from:box.querySelector('[data-quick-from]').value,error:''};programStaffDrafts.set(id,draft);button.disabled=false;feedback.textContent='';return draft};
+ const capture=()=>{const pending=programStaffDrafts.get(id);if(pending?.applied){feedback.textContent='앞선 변경을 서버에 저장한 뒤 다시 수정해 주세요.';return pending}const draft={assignments:Object.fromEntries([...box.querySelectorAll('[data-quick-staff]')].map(input=>[input.dataset.quickStaff,input.value])),from:box.querySelector('[data-quick-from]').value,error:''};programStaffDrafts.set(id,draft);button.disabled=false;feedback.textContent='';box.querySelector('.quick-apply-summary').textContent=draft.from+'부터 적용';return draft};
  box.querySelectorAll('input,select').forEach(input=>input.onchange=capture);
  button.onclick=async()=>{
   const draft=programStaffDrafts.get(id)||capture();draft.saving=true;button.disabled=true;button.textContent='저장 중…';box.querySelectorAll('input,select').forEach(input=>input.disabled=true);

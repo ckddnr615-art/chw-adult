@@ -140,6 +140,7 @@ async function saveProgramAttendance(command){
 function bindProgramAttendance(){
   const panel=$('#programAttendancePanel');
   if(!panel)return;
+  bindAttendanceCalendars();
   panel.querySelectorAll('[data-program-group]').forEach(group=>group.ontoggle=()=>{
     if(!group.isConnected)return;
     if(group.open)openProgramGroups.add(group.dataset.programGroup);

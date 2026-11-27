@@ -180,3 +180,19 @@ body.participant-mode{background:#fff}
 
 /* Do not expose the previous day under newly selected date controls. */
 @media screen{#main[data-attendance-date-loading] :is(#rows,.program-attendance-group,.ledger-panel){visibility:hidden}#main[data-attendance-date-loading] #programAttendanceFeedback{font-size:17px;font-weight:700;color:#345591}}
+
+/* The holiday picker stays readable on tablets and narrow phones. */
+.attendance-calendar-open{margin:6px 0 0 6px;white-space:nowrap}
+dialog.attendance-holiday-calendar{width:min(760px,calc(100vw - 24px));max-width:760px;max-height:90dvh;padding:20px;box-sizing:border-box;overflow:auto;border:1px solid #c9d7e9;border-radius:18px;color:#24374d;background:#fff}
+.attendance-calendar-heading,.attendance-calendar-navigation{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px}
+.attendance-calendar-heading h2{margin:0;font-size:22px}
+.attendance-calendar-status{font-size:15px;min-height:24px}
+.attendance-calendar-weekdays,.attendance-calendar-dates{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:5px}
+.attendance-calendar-weekdays{text-align:center;font-weight:700;margin-bottom:8px}
+.attendance-calendar-day{display:flex;flex-direction:column;align-items:flex-start;justify-content:flex-start;gap:4px;min-width:0;min-height:82px;padding:8px 6px;border:1px solid #d5dfed;border-radius:8px;background:white;color:#24374d;text-align:left}
+.attendance-calendar-day strong{font-size:18px}.attendance-calendar-day strong span{font-size:12px;margin-left:4px;color:#246d55}
+.attendance-calendar-day small{font-size:13px;line-height:1.4;overflow-wrap:anywhere;white-space:normal}
+.attendance-calendar-day.is-closed{color:#a33737;background:#fff5f1}
+.attendance-calendar-day.is-selected{border:2px solid #35568f;background:#edf3ff}
+.attendance-calendar-day:disabled{opacity:.55}.attendance-calendar-day:focus-visible{outline:3px solid #316dcd;outline-offset:1px}
+@media(max-width:520px){dialog.attendance-holiday-calendar{padding:12px}.attendance-calendar-dates{gap:3px}.attendance-calendar-day{min-height:72px;padding:6px 3px}.attendance-calendar-day small{font-size:12px}.attendance-calendar-day strong span{display:block;margin:0}.attendance-calendar-navigation button{padding:8px;font-size:14px}}
